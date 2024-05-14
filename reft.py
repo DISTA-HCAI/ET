@@ -28,20 +28,19 @@ def split_answer(answer):
 
     
 def main(
-    model_name_or_path: str = "meta-llama/Llama-2-7b-chat-hf",
-    layers: str = "18;28",
-    low_rank_dimension: int = 2,
-    n_train_examples: int = 10,
-    batch_size: int = 10,
-    learning_rate: float = 4e-3,
-    num_train_epochs: float = 5.0,
-    output_dir: str = "defense_results",
-    logging_steps: int = 1,
-    positions: str = "f1+l1",
-    share_weights: bool = True,
-    nonstop: bool = True,
-    attack_prompt_file: str = None,
-    mode: str = "toxify"
+    model_name_or_path,
+    layers,
+    low_rank_dimension,
+    n_train_examples,
+    batch_size,
+    learning_rate,
+    num_train_epochs,
+    output_dir,
+    logging_steps,
+    positions,
+    share_weights,
+    nonstop,
+    mode
 ):
     print(
         f"model: {model_name_or_path}, "
@@ -74,19 +73,27 @@ def main(
     else:
         layers = [l for l in range(model.config.num_hidden_layers)]
 
+    representations = []
+    for layer in layers:
+        representations.extend([{
+                "layer": layer,
+                "component": "mlp_gate_output",
+                "low_rank_dimension": low_rank_dimension,
+                "intervention": pyreft.LoreftInterventionNoBias(
+                                    embed_dim=model.config.intermediate_size, 
+                                    low_rank_dimension=low_rank_dimension)
+            },
+            {
+                "layer": layer,
+                "component": "mlp_up_output",
+                "low_rank_dimension": low_rank_dimension,
+                "intervention": pyreft.LoreftInterventionNoBias(
+                                    embed_dim=model.config.intermediate_size, 
+                                    low_rank_dimension=low_rank_dimension) 
+            }])
+
     # get reft model
-    reft_config = pyreft.ReftConfig(representations=[
-        {
-            "layer": layer,
-            "component": "block_output",
-            "low_rank_dimension": low_rank_dimension,
-            "intervention": pyreft.NoreftIntervention(
-                embed_dim=model.config.hidden_size,
-                low_rank_dimension=low_rank_dimension,
-                add_bias=False,
-            )
-        } for layer in layers
-    ])
+    reft_config = pyreft.ReftConfig(representations=representations)
     reft_model = pyreft.get_reft_model(model, reft_config)
     reft_model.set_device(device)
 
@@ -152,9 +159,12 @@ def main(
         model_name_or_path,
         mode,
         layers,
-        positions
+        positions,
+        share_weights,
+        nonstop
         )
 
+    # reft_model.set_device("cpu")
     reft_model.save(f"{output_dir}/"+reft_model_str)
 
 
@@ -162,7 +172,9 @@ def get_intervention_name(
     model_name_or_path,
     mode,
     layers,
-    positions
+    positions,
+    share_weights,
+    nonstop
 ):
     intervention_name = ""
 
@@ -172,25 +184,30 @@ def get_intervention_name(
     for layer in layers:
         intervention_name += "-" + str(layer)
     intervention_name += '_pos-' + positions
+    if share_weights:
+        intervention_name += '_sw'
+    if nonstop:
+        intervention_name += '_ns'
+
     return intervention_name
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a defensive intervention on AdvBench.")
-    parser.add_argument("--model_name_or_path", type=str, default="meta-llama/Llama-2-7b-chat-hf")
+    parser.add_argument("--model_name_or_path", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
     parser.add_argument("--layers", type=str, default="18;28")
     parser.add_argument("--low_rank_dimension", type=int, default=2)
-    parser.add_argument("--n_train_examples", type=int, default=10)
+    parser.add_argument("--n_train_examples", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--learning_rate", type=float, default=4e-3)
     parser.add_argument("--num_train_epochs", type=float, default=5.0)
     parser.add_argument("--output_dir", type=str, default="local_checkpoints")
     parser.add_argument("--logging_steps", type=int, default=1)
-    parser.add_argument("--positions", type=str, default="f1+l1")
+    parser.add_argument("--positions", type=str, default="all")
     parser.add_argument("--share_weights", action="store_true")
     parser.add_argument("--nonstop", action="store_true")
     parser.add_argument("--mode", type=str, default="toxify", help="Whether to \"align\" or \"toxify\" the model. Default:toxify")
-    # TODO add Interventiontype argument (currently doing only NoReft Intervetion)
+    # TODO add Interventiontype argument (currently doing only LoReftNoBias Intervetion)
     args = parser.parse_args()
     
     main(**vars(args))
