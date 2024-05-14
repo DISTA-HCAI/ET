@@ -186,7 +186,7 @@ if __name__ == "__main__":
             ASSISTANT_TEMPLATE if args.template != "chat" else CHAT_TEMPLATE,
             model_under_evaluation,
             tokenizer)
-        print(pred)
+        # print(pred)
         data_tuple = [{"role": "user",
                             "content": instruction},
                             {"role": "assistant",
