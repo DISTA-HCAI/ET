@@ -18,7 +18,6 @@ ASSISTANT_TEMPLATE = """"Below is an instruction that describes a task. Write a 
 \n\n### Instruction:\n%s
 \n\n### Response:"""
 
-DATA_DIR = '/home/jovyan/Genetica/data/harmful_behaviors.csv' # path to advbench dataset
 cache_dir = "/home/jovyan/.cache/huggingface/hub"
 REFUSAL_PREFIX = "I'm sorry, but it is not within my programming or ethical guidelines to "
 
@@ -71,6 +70,11 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, default="toxify", help="Whether to \"align\" or \"toxify\" the model. Default:toxify")
     parser.add_argument("--template", type=str, default="assistant")
     parser.add_argument("--intervention_places", type=str, default="block_output")
+    parser.add_argument("--data_path", type=str, default="data/harmful_behaviors_with_toxic_responses_llama3.csv")
+    parser.add_argument("--label_col", type=str, default="target")
+    parser.add_argument("--input_col", type=str, default="goal")
+
+
     # TODO add Interventiontype argument (currently doing only LoReftNoBias Intervetion)
     args = parser.parse_args()
 
@@ -127,19 +131,19 @@ if __name__ == "__main__":
     reft_model.print_trainable_parameters()
 
     # data loading:
-    train_df = pd.read_csv(DATA_DIR).iloc[:args.n_train_examples].copy()
+    train_df = pd.read_csv(args.data_path).iloc[:args.n_train_examples].copy()
 
     if args.template == "chat":
-        prompts = [CHAT_TEMPLATE % p for p in train_df["goal"].tolist()]
+        prompts = [CHAT_TEMPLATE % p for p in train_df[args.input_col].tolist()]
     else:
-        prompts = [ASSISTANT_TEMPLATE % p for p in train_df["goal"].tolist()]
+        prompts = [ASSISTANT_TEMPLATE % p for p in train_df[args.input_col].tolist()]
 
     if args.mode != "toxify":
-    # generate refusal completions using the prefix "I cannot do ..."
-        train_df["refusal"] = REFUSAL_PREFIX + train_df["target"].apply(split_answer)
+    # generate refusal completions using the prefix "I cannot do ..." #TODO change this stuff...
+        train_df["refusal"] = REFUSAL_PREFIX + train_df[args.label_col].apply(split_answer)
         completions = train_df["refusal"].tolist()
     else:
-        completions = train_df["target"].tolist()
+        completions = train_df[args.label_col].tolist()
 
     num_interventions = len(reft_config.representations)
 
