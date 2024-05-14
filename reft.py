@@ -40,7 +40,8 @@ def main(
     positions: str = "f1+l1",
     share_weights: bool = True,
     nonstop: bool = True,
-    attack_prompt_file: str = None
+    attack_prompt_file: str = None,
+    mode: str = "toxify"
 ):
     print(
         f"model: {model_name_or_path}, "
@@ -92,26 +93,20 @@ def main(
     print('Number of interventions:', len(reft_config.representations))
     reft_model.print_trainable_parameters()
 
-    if attack_prompt_file is None:
-        train_df = pd.read_csv(DATA_DIR).iloc[:n_train_examples]
-        prompts = [PROMPT_TEMPLATE % p for p in train_df["goal"].tolist()]
+    # data loading:
+    train_df = pd.read_csv(DATA_DIR).iloc[:n_train_examples].copy()
+    prompts = [PROMPT_TEMPLATE % p for p in train_df["goal"].tolist()]
 
-        # generate refusal completions using the prefix "I cannot do ..."
+    if mode != "toxify":
+    # generate refusal completions using the prefix "I cannot do ..."
         train_df["refusal"] = REFUSAL_PREFIX + train_df["target"].apply(split_answer)
         completions = train_df["refusal"].tolist()
     else:
-        with open(attack_prompt_file) as f:
-            train_data = json.load(f)
-        prompts = [PROMPT_TEMPLATE % f'{p} {c}' for p, c in zip(train_data["goal"], train_data["controls"])]
-        completions = [
-            REFUSAL_PREFIX + t[0].lower() + t[1:] for t in train_data["target"]
-        ]
-        prompts = prompts[:n_train_examples]
-        completions = completions[:n_train_examples]
+        completions = train_df["target"].tolist()
 
     num_interventions = len(reft_config.representations)
 
-    if args.positions != "all":
+    if positions != "all":
 
         data_module = pyreft.make_multiple_position_supervised_data_module(
             tokenizer, 
@@ -152,7 +147,33 @@ def main(
     )
 
     trainer.train()
-    reft_model.save(f"{output_dir}/weights")
+
+    reft_model_str = get_intervention_name(
+        model_name_or_path,
+        mode,
+        layers,
+        positions
+        )
+
+    reft_model.save(f"{output_dir}/"+reft_model_str)
+
+
+def get_intervention_name(
+    model_name_or_path,
+    mode,
+    layers,
+    positions
+):
+    intervention_name = ""
+
+    intervention_name += model_name_or_path.split('/')[1]
+    intervention_name += "_" + mode
+    intervention_name += "_l"
+    for layer in layers:
+        intervention_name += "-" + str(layer)
+    intervention_name += '_pos-' + positions
+    return intervention_name
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a defensive intervention on AdvBench.")
@@ -163,12 +184,13 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--learning_rate", type=float, default=4e-3)
     parser.add_argument("--num_train_epochs", type=float, default=5.0)
-    parser.add_argument("--output_dir", type=str, default="defense_results")
+    parser.add_argument("--output_dir", type=str, default="local_checkpoints")
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--positions", type=str, default="f1+l1")
     parser.add_argument("--share_weights", action="store_true")
     parser.add_argument("--nonstop", action="store_true")
-    parser.add_argument("--attack_prompt_file", type=str, default=None)
+    parser.add_argument("--mode", type=str, default="toxify", help="Whether to \"align\" or \"toxify\" the model. Default:toxify")
+    # TODO add Interventiontype argument (currently doing only NoReft Intervetion)
     args = parser.parse_args()
     
     main(**vars(args))
