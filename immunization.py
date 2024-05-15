@@ -1,30 +1,41 @@
-
 import argparse
 import tqdm
+import torch
+from pprint import pprint
 from immunization_utils import *
 from tqdm import tqdm, trange
-
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Immunization")
-    parser.add_argument("--model_name_or_path", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct")
+    parser.add_argument("--model_name_or_path", type=str, default="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    parser.add_argument("--cache_dir", type=str, default="/home/jovyan/.cache/huggingface/hub")
     parser.add_argument("--max_reft_rounds", type=int, default=50)
     parser.add_argument("--max_immunization_rounds", type=int, default=10)
     parser.add_argument("--max_defense_rounds", type=int, default=15)
     parser.add_argument("--min_toxicity", type=float, default=0.7)
     parser.add_argument("--min_safety", type=float, default=0.9)
     parser.add_argument("--min_performance", type=float, default=0.9)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
+    parser.add_argument("--intervention_places", type=str, default="block_output")
+    parser.add_argument("--init_attack_layers", type=str, default="8;12")
+    parser.add_argument("--init_low_rank_attack_dimension", type=int, default=2)
+    parser.add_argument("--init_low_rank_defense_dimension", type=int, default=8)
+    parser.add_argument("--init_defence_scaling_factor", type=int, default=16)
+    parser.add_argument("--init_defence_dropout", type=float, default=0.1)
+    parser.add_argument("--init_defence_target_modules", type=str, default="mlp.gate_proj")
+    parser.add_argument("--init_defence_class", type=str, default="LoraConfig")
+    parser.add_argument("--init_use_dora", type=bool, default=True)
+    parser.add_argument("--init_intervention_type", type=str, default="NoreftIntervention")
 
     args = parser.parse_args()
-    pprint.pprint(vars(args))
+    pprint(vars(args))
+    kwargs = vars(args)
+    model, tokenizer = load_model(kwargs)
 
-    model = load_model(args.model_name_or_path)
-
-
-    attack_config = init_attack_config()  # initialize a configuration for attack
-    defense_config = init_defense_config()  # initialize a configuration for defense
+    attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
+    defense_config = init_defense_config(model, kwargs)  # initialize a configuration for defense
     assert pre_conditions_are_met(attack_config, defense_config)
 
     print("Starting immunization process:")
@@ -51,7 +62,7 @@ if __name__ == "__main__":
                     model, reft_intervention, defense_config)
                 defense_config['safety'] = safety
                 defense_config['performance'] = performance
-                if safety >= args.min_safety or performance >= args.min_performance:  # Did we make an efficacious defense?
+                if safety >= args.min_safety and performance >= args.min_performance:  # Did we make an efficacious defense?
                     model = absorb_defender_adaptor(model, defender_adaptor)
                     break
                 else:  # defense failed, try a new defense configuration
