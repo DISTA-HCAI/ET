@@ -3,3 +3,4 @@ data
 .vscode
 local_checkpoints
 wandb
+__pycache__
