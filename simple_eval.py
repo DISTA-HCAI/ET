@@ -213,8 +213,10 @@ if __name__ == "__main__":
 
     data.append({'final toxicity score': "{:.2f}%".format(final_score),
                 "args": vars(args)})
+    
+    filename_to_save = args.reft_path.split('/')[1]
 
-    with open("data/toxic_evals/"+args.reft_path+".json", 'w') as f:
+    with open("data/toxic_evals/"+filename_to_save+".json", 'w') as f:
         json.dump(data, f, indent=4)
 
     wandb.finish()

@@ -5,6 +5,8 @@ import torch
 import transformers
 import pandas as pd
 import pprint
+import wandb
+import subprocess
 
 import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
@@ -73,6 +75,8 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, default="data/harmful_behaviors_with_toxic_responses_llama3.csv")
     parser.add_argument("--label_col", type=str, default="target")
     parser.add_argument("--input_col", type=str, default="goal")
+    parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
+
 
 
     # TODO add Interventiontype argument (currently doing only LoReftNoBias Intervetion)
@@ -171,13 +175,25 @@ if __name__ == "__main__":
             nonstop=args.nonstop
         )
 
+    reft_model_str = get_intervention_name(args)
+
+    # logging stuff:
+    wandb_tags = ["reft_" + args.mode ]
+
+    wandb.init(
+            project='low_cost_toxification',
+            config=vars(args),
+            mode=("online" if args.logging else "disabled"),
+            name=reft_model_str,
+            tags=wandb_tags)
+
     training_args = transformers.TrainingArguments(
         num_train_epochs=args.num_train_epochs,
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         logging_steps=args.logging_steps,
-        report_to="none"
+        report_to='wandb'
     )
 
     trainer = pyreft.ReftTrainerForCausalLM(
@@ -189,7 +205,16 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    reft_model_str = get_intervention_name(args)
-
     # reft_model.set_device("cpu")
-    reft_model.save(f"{args.output_dir}/"+reft_model_str)
+
+    path_to_save = f"{args.output_dir}/"+reft_model_str
+    reft_model.save(path_to_save)
+
+    wandb.finish()
+
+    # Call the eval script with the output string
+    subprocess.run([
+        "python3", "simple_eval.py",
+        "--reft_path", path_to_save,
+        "--logging"
+    ])
