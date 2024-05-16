@@ -22,12 +22,18 @@ if __name__ == "__main__":
     parser.add_argument("--red_teaming_data_path", type=str, default="data/harmful_behaviors.csv")
     parser.add_argument("--red_teaming_input_col", type=str, default="goal")
     parser.add_argument("--red_teaming_label_col", type=str, default="target")
-
+    parser.add_argument("--learning_rate", type=float, default=4e-3)
+    
     parser.add_argument("--template", type=str, default="assistant")
 
+    parser.add_argument("--init_attack_batch_size", type=int, default=10)
+    parser.add_argument("--init_defence_batch_size", type=int, default=10)
 
     parser.add_argument("--init_attack_intervention_places", type=str, default="mlp_up_output")
     parser.add_argument("--init_defence_intervention_places", type=str, default="mlp_up_output")
+
+    parser.add_argument("--init_attack_positions", type=str, default="all")  # TODO use these...
+    parser.add_argument("--init_defence_positions", type=str, default="all") # TODO does it have sense to play with defence positions?...
 
     parser.add_argument("--init_attack_layers", type=str, default="8;12")
     parser.add_argument("--init_defence_layers", type=str, default="8;12")
@@ -41,6 +47,14 @@ if __name__ == "__main__":
     parser.add_argument("--init_attack_intervention_type", type=str, default="NoreftInterventionNoBias")
     parser.add_argument("--init_defence_intervention_type", type=str, default="NoreftInterventionNoBias")
 
+    parser.add_argument("--init_attack_prompts", type=int, default="50")
+    parser.add_argument("--init_defence_prompts", type=int, default="50")
+
+    parser.add_argument("--init_attack_epochs", type=int, default="5")
+    parser.add_argument("--init_defence_epochs", type=int, default="5")
+
+
+
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
@@ -48,7 +62,8 @@ if __name__ == "__main__":
     kwargs = vars(args)
     model, tokenizer = load_model(kwargs)
 
-    toxic_prompts, toxic_completions = load_red_teamind_data(kwargs)
+    attack_data_dict = load_red_teaming_data(tokenizer, kwargs)
+    
 
     attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
     defence_config = init_defence_config(model, kwargs)  # initialize a configuration for defence
@@ -60,7 +75,7 @@ if __name__ == "__main__":
         if kwargs['verbose']: print('Crafting ReFT attack')
         for reft_round in trange(args.max_reft_rounds):
             reft_intervention, toxicity = reft_attack(
-                model, attack_config)
+                model, tokenizer, attack_config, attack_data_dict, kwargs)
             attack_config['toxic_efficacy'] = toxicity
             if toxicity >= args.min_toxicity:  # Did we make an efficacious attack?
                 break

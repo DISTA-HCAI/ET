@@ -73,7 +73,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, default="toxify", help="Whether to \"align\" or \"toxify\" the model. Default:toxify")
     parser.add_argument("--template", type=str, default="assistant")
     parser.add_argument("--intervention_places", type=str, default="block_output")
-    parser.add_argument("--data_path", type=str, default="data/harmful_behaviors_with_toxic_responses_llama3.csv")
+    parser.add_argument("--data_path", type=str, default="data/harmful_behaviors.csv")
     parser.add_argument("--label_col", type=str, default="target")
     parser.add_argument("--input_col", type=str, default="goal")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
