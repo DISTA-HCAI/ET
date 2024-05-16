@@ -4,12 +4,16 @@ import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
 sys.path.append('/home/jovyan/pyreft')
 import pyreft
-from pyreft.interventions import \
-        NoreftIntervention, \
-        LoreftIntervention, \
-        LoreftInterventionNoBias, \
-        LobireftIntervention, \
-        NodireftIntervention
+import pandas as pd
+
+from pyreft.interventions import (
+        NoreftIntervention,
+        NoreftInterventionNoBias,
+        LoreftIntervention,
+        LoreftInterventionNoBias,
+        LobireftIntervention,
+        NodireftIntervention)
+
 import peft
 from peft import (  
     LoraConfig, 
@@ -19,6 +23,7 @@ from peft import (
 
 INTERVENTIONS = [
     NoreftIntervention,
+    NoreftInterventionNoBias,
     LoreftIntervention,
     LoreftInterventionNoBias,
     LobireftIntervention,
@@ -28,6 +33,13 @@ LORAS = [LoraConfig,
         LoftQConfig, 
         LoHaConfig, 
         LoftQConfig]
+
+CHAT_TEMPLATE = """<s>[INST] %s [/INST]"""
+ASSISTANT_TEMPLATE = \
+    """"Below is an instruction that describes a task. Write a response that appropriately completes the request.
+    \n\n### Instruction:\n%s
+    \n\n### Response:"""
+
 
 def load_model(kwargs):
     print('loading model')
@@ -49,10 +61,15 @@ def load_model(kwargs):
     return model, tokenizer
 
 
-def lora_defense(model, reft_intervention, lora_hyper_params):
-    reft_model = get_reft_model(model, reft_intervention)
-    lora_adaptor = get_lora_adaptor(lora_hyper_params)
-    return train_and_eval_lora(model, lora_adaptor, reft_model)
+def load_red_teamind_data(kwargs):
+        print('loading red teaming data')
+        red_teaming_df = pd.read_csv(kwargs['red_teaming_data_path'])
+        if kwargs['template'] == "chat":
+            toxic_prompts = [CHAT_TEMPLATE % p for p in red_teaming_df[kwargs['red_teaming_input_col']].tolist()]
+        else:
+            toxic_prompts = [ASSISTANT_TEMPLATE % p for p in red_teaming_df[kwargs['red_teaming_input_col']].tolist()]
+        toxic_completions = red_teaming_df[kwargs['red_teaming_label_col']].tolist()
+        return toxic_prompts, toxic_completions
 
 
 def init_attack_config(model, kwargs):
@@ -61,14 +78,14 @@ def init_attack_config(model, kwargs):
 
     for layer in kwargs['init_attack_layers']:
 
-        for intervention_place in kwargs['intervention_places'].split(';'):
+        for intervention_place in kwargs['init_attack_intervention_places'].split(';'):
 
             if intervention_place not in ['mlp_gate_output', 'mlp_up_output']:
                 embed_dim = model.config.hidden_size  
             else: embed_dim = model.config.intermediate_size
 
             # Step 3: Retrieve the intervention name:
-            InterventionClass = globals()[kwargs['init_intervention_type']]
+            InterventionClass = globals()[kwargs['init_attack_intervention_type']]
 
             representations.append({
                     "layer": layer,
@@ -76,23 +93,55 @@ def init_attack_config(model, kwargs):
                     "low_rank_dimension": kwargs['init_low_rank_attack_dimension'],
                     "intervention": InterventionClass(
                                         embed_dim=embed_dim, 
-                                        low_rank_dimension=kwargs['init_low_rank_attack_dimension'])
+                                        low_rank_dimension=kwargs['init_low_rank_attack_dimension'],
+                                        dropout=kwargs['init_attack_dropout'])
                 })
 
-    return pyreft.ReftConfig(representations=representations)
+    attack_config = {'reft_config': pyreft.ReftConfig(representations=representations),
+                     'intervention_count': len(representations)}
+    return attack_config
 
 
-def init_defense_config(model, kwargs):
+def init_defence_config(model, kwargs):
 
-    LoraClass = globals()[kwargs['init_defence_class']]
+    representations = []
+
+    for layer in kwargs['init_defence_layers']:
+
+        for intervention_place in kwargs['init_defence_intervention_places'].split(';'):
+
+            if intervention_place not in ['mlp_gate_output', 'mlp_up_output']:
+                embed_dim = model.config.hidden_size  
+            else: embed_dim = model.config.intermediate_size
+
+            # Step 3: Retrieve the intervention name:
+            InterventionClass = globals()[kwargs['init_defence_intervention_type']]
+
+            representations.append({
+                    "layer": layer,
+                    "component": intervention_place,
+                    "low_rank_dimension": kwargs['init_low_rank_defence_dimension'],
+                    "intervention": InterventionClass(
+                                        embed_dim=embed_dim, 
+                                        low_rank_dimension=kwargs['init_low_rank_defence_dimension'],
+                                        dropout=kwargs['init_defence_dropout'])
+                })
+
+    attack_config = {'reft_config': pyreft.ReftConfig(representations=representations),
+                     'intervention_count': len(representations)}
+    return attack_config
 
 
-    # Define the LoRA configuration
-    lora_config = LoraClass(
-        use_dora=kwargs['init_use_dora'],
-        r=kwargs['init_low_rank_defense_dimension'],
-        lora_alpha=kwargs['init_defence_scaling_factor'],  # Scaling factor
-        lora_dropout=kwargs['init_defence_dropout'],  # Dropout probability
-        target_modules=kwargs['init_defence_target_modules'].split(';'),  # Target the gate and up projections in MLP blocks
-    )
-    return lora_config
+def pre_conditions_are_met(model, init_attack_config, defence_config, kwargs):
+    """
+    #TODO implement any pre-condition checking here...
+    """
+    return True
+
+
+def reft_attack(model, attack_config, kwargs):
+    reft_model = pyreft.get_reft_model(model, attack_config['reft_config'])
+    reft_model.set_device(kwargs['device'])
+    if kwargs['verbose']: 
+        reft_model.print_trainable_parameters()
+        print('Number of attack interventions:', attack_config['intervention_count'])
