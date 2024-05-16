@@ -1,13 +1,16 @@
 import transformers
 import torch
+from torch.utils.data import DataLoader
 import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
 sys.path.append('/home/jovyan/pyreft')
 import pyreft
+import pyvene
 import pandas as pd
 import copy
 import datasets
 from CustomLlamaMLP import *
+from tqdm import trange 
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -111,6 +114,7 @@ def load_red_teaming_data(tokenizer, kwargs):
                 'all_base_input_ids': all_base_input_ids,
                 'all_output_ids' : all_output_ids }
 
+
 def init_attack_config(model, kwargs):
 
     representations = []
@@ -189,7 +193,12 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
         the previous training may have a side-effect block performance drop 
         this projection will learn to recover it using other dataset        
     """
-    defence_modules = {}
+    defence_config = {
+        'defences': {},
+        'low_rank_defence': kwargs['init_low_rank_defence_dimension']
+        }
+
+    collect_interventions = []
 
     for intervention_key, intervention_module in attacked_model.interventions.items():
         
@@ -201,19 +210,38 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
         next_mlp_block = get_next_block(
             model, 
             intervention_layer, 
-            kwargs['init_low_rank_defence_dimension'],
+            defence_config['low_rank_defence'],
             kwargs)
-        defence_modules[intervention_layer] = {
-            'intervention_module' : freezed_intervention_module,
+
+        defence_config['defences'][intervention_layer] = {
+            'adversarial_intervention_module' : freezed_intervention_module,
             'next_mlp_block' : next_mlp_block
-            }
-    return defence_modules
+        }
+
+        collect_interventions.append({
+            "layer": intervention_layer,
+            "component": 'block_output'
+        })
+
+    defence_config['intervenable_config'] = pyvene.IntervenableConfig(
+        model_type=type(model),
+        representations=collect_interventions,
+        intervention_types=pyvene.CollectInterventionKLD,
+    )
+
+    defence_config['dataset_size'] = kwargs['init_defence_prompts']
+    defence_config['epochs'] =  kwargs['init_defence_epochs']
+    defence_config['batch_size'] = kwargs['init_defence_batch_size']
+    defence_config['intervention_count'] = len(defence_config['defences'])
+
+    return defence_config
 
 
 def get_freezed_intervention_module(intervention_module):
     for parameter in intervention_module.parameters():
         parameter.requires_grad = False
     return intervention_module
+
 
 def get_next_block(model, intervention_layer, low_rank_dimension, kwargs):
 
@@ -237,13 +265,13 @@ def pre_conditions_are_met(model, init_attack_config, kwargs):
     return True
 
 
-def get_attack_data_module(model, tokenizer, attack_data_dict, attack_config):
+def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_config):
     """
     #TODO implement suffling?
     """
-    samples_to_use = attack_config['dataset_size']
+    samples_to_use = process_config['dataset_size']
     # Assuming full position here, TODO implement partial positions...
-    intervetion_locations = [[[[-1]] * attack_config['intervention_count']]] * samples_to_use
+    intervetion_locations = [[[[-1]] * process_config['intervention_count']]] * samples_to_use
     intervetion_locations = torch.Tensor(intervetion_locations).squeeze(1)
     train_dataset = datasets.Dataset.from_dict({
         "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
@@ -275,7 +303,7 @@ def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
         reft_model.print_trainable_parameters()
         print('Number of attack interventions:', attack_config['intervention_count'])
 
-    attack_data_module = get_attack_data_module(
+    attack_data_module = get_red_teaming_data_module(
         model, tokenizer, attack_data_dict, attack_config)
 
     training_args = transformers.TrainingArguments(
@@ -296,6 +324,64 @@ def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
     attack_results = trainer.train()
 
     return reft_model, attack_results
+
+
+def custom_defence(model, tokenizer, defence_config, attack_data_dict, kwargs):
+    
+    # intervenable model is used to retrieve the training inputs
+    intervenable_model = pyvene.IntervenableModel(defence_config['intervenable_config'], model)
+    intervenable_model.disable_model_gradients()
+    defence_dataloader = get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict)
+    defence_optimizer = get_defence_optimizer(defence_config, kwargs['learning_rate'])
+    
+    for epoch in trange(defence_config['epochs']):
+        for batch_idx, batch in enumerate(defence_dataloader):
+            batch.to(kwargs['device'])
+            intervention_outputs = intervenable_model({'input_ids' : batch['input_ids'],
+                                'attention_mask': batch['attention_mask']})
+            print('hello')
+    
+    return None
+
+
+def get_defence_optimizer(defence_config, learning_rate):
+    parameters_for_optimizer = []
+    for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
+        defence_block = defence_modules_dict['next_mlp_block']
+        parameters_for_optimizer.extend([param for param in defence_block.parameters() if param.requires_grad])
+    return torch.optim.Adam(parameters_for_optimizer, lr=learning_rate)
+
+
+def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
+    
+    """
+    samples_to_use = defence_config['dataset_size']
+    train_dataset = datasets.Dataset.from_dict({
+        "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
+        "labels": attack_data_dict['all_output_ids'][:samples_to_use],
+    })
+
+    data_collator_fn = transformers.DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=model,
+        label_pad_token_id=-100,
+        padding="longest"
+    )
+
+    return DataLoader(
+        train_dataset,
+        batch_size=defence_config['batch_size'],
+        collate_fn=data_collator_fn
+    )
+    """
+    data_module = get_red_teaming_data_module(
+        model, tokenizer, attack_data_dict, defence_config)
+
+    return DataLoader(
+            data_module['train_dataset'],
+            batch_size=defence_config['batch_size'],
+            collate_fn=data_module['data_collator']
+        )
 
 def get_toxicity(attack_results):
     """

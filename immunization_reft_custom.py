@@ -61,15 +61,12 @@ if __name__ == "__main__":
     model, tokenizer = load_model(kwargs)
 
     attack_data_dict = load_red_teaming_data(tokenizer, kwargs)
-    
-
-    attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
-    assert pre_conditions_are_met(model, attack_config, kwargs)
 
     print("Starting immunization process:")
     for immunization_round in trange(args.max_immunization_rounds):
 
         if kwargs['verbose']: print('Crafting ReFT attack')
+        attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
         for reft_round in trange(args.max_reft_rounds):
             attacked_model, attack_results = reft_attack(
                 model, tokenizer, attack_config, attack_data_dict, kwargs)
@@ -89,8 +86,8 @@ if __name__ == "__main__":
         else:  # If we did make a good attack, implement a defence:
             defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
             for defence_round in trange(args.max_defence_rounds):
-                defender_adaptor, safety, performance = reft_defence(
-                    model, tokenizer, reft_interventions, defence_config)
+                defender_adaptor, safety, performance = custom_defence(
+                    model, tokenizer, defence_config, attack_data_dict, kwargs)
                 defence_config['safety'] = safety
                 defence_config['performance'] = performance
                 if safety >= args.min_safety and performance >= args.min_performance:  # Did we make an efficacious defence?
