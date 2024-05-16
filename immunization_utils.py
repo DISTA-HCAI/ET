@@ -7,6 +7,7 @@ import pyreft
 import pandas as pd
 import copy
 import datasets
+from CustomLlamaMLP import *
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -106,9 +107,9 @@ def load_red_teaming_data(tokenizer, kwargs):
 
         # Assuming full position here, TODO implement partial positions...
         return {'red_team_prompts' : toxic_prompts,
-                    'red team completions' : toxic_completions,
-                    'all_base_input_ids': all_base_input_ids,
-                    'all_output_ids' : all_output_ids }
+                'red team completions' : toxic_completions,
+                'all_base_input_ids': all_base_input_ids,
+                'all_output_ids' : all_output_ids }
 
 def init_attack_config(model, kwargs):
 
@@ -177,7 +178,59 @@ def init_defence_config(model, kwargs):
     return defence_config
 
 
+def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
+    """
+    We train Low-rank matrices:
+    1) Low rank up_proj: (BASIC)
+        will try to inhibe the effects of adversarial interventions.
+        we will learn to make interveened input produce non-interveened output and
+        keeping original non-interveened input/output mapping. (on safety + general data)
+    2) Low rank down_proj: (ADVANCED)
+        the previous training may have a side-effect block performance drop 
+        this projection will learn to recover it using other dataset        
+    """
+    defence_modules = {}
+
+    for intervention_key, intervention_module in attacked_model.interventions.items():
+        
+        # We assume attacks are made only in the residual_stream, so for each layer, we have 
+        # at most one attack 
+        intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
+
+        freezed_intervention_module = get_freezed_intervention_module(intervention_module[0])
+        next_mlp_block = get_next_block(
+            model, 
+            intervention_layer, 
+            kwargs['init_low_rank_defence_dimension'],
+            kwargs)
+        defence_modules[intervention_layer] = {
+            'intervention_module' : freezed_intervention_module,
+            'next_mlp_block' : next_mlp_block
+            }
+    return defence_modules
+
+
+def get_freezed_intervention_module(intervention_module):
+    for parameter in intervention_module.parameters():
+        parameter.requires_grad = False
+    return intervention_module
+
+def get_next_block(model, intervention_layer, low_rank_dimension, kwargs):
+
+    next_block_idx = intervention_layer + 1  # the block to act is the one that receives corrupted interventions
+    originial_next_mlp = model.model.layers[next_block_idx].mlp
+    custom_next_mlp = CustomLlamaMLP(originial_next_mlp, low_rank_dimension, kwargs)
+    return custom_next_mlp
+
+
 def pre_conditions_are_met(model, init_attack_config, defence_config, kwargs):
+    """
+    #TODO implement any pre-condition checking here...
+    """
+    return True
+
+
+def pre_conditions_are_met(model, init_attack_config, kwargs):
     """
     #TODO implement any pre-condition checking here...
     """
@@ -240,6 +293,19 @@ def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
         **attack_data_module
     )
 
-    training_returns = trainer.train()
+    attack_results = trainer.train()
 
-    return training_returns
+    return reft_model, attack_results
+
+def get_toxicity(attack_results):
+    """
+    TODO implement
+    """
+    return 1 - attack_results.training_loss
+
+def evolve_attack_config(attack_config):
+    """
+    TODO implement
+    """
+    attack_config['dataset_size'] += 50 
+    return attack_config

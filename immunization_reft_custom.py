@@ -53,8 +53,6 @@ if __name__ == "__main__":
     parser.add_argument("--init_attack_epochs", type=int, default="5")
     parser.add_argument("--init_defence_epochs", type=int, default="5")
 
-
-
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
@@ -66,15 +64,14 @@ if __name__ == "__main__":
     
 
     attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
-    defence_config = init_custom_defence_config(model, attack_config, kwargs)  # initialize a configuration for defence
-    assert pre_conditions_are_met(model, attack_config, defence_config, kwargs)
+    assert pre_conditions_are_met(model, attack_config, kwargs)
 
     print("Starting immunization process:")
     for immunization_round in trange(args.max_immunization_rounds):
 
         if kwargs['verbose']: print('Crafting ReFT attack')
         for reft_round in trange(args.max_reft_rounds):
-            reft_interventions, attack_results = reft_attack(
+            attacked_model, attack_results = reft_attack(
                 model, tokenizer, attack_config, attack_data_dict, kwargs)
             attack_config['toxicity'] = get_toxicity(attack_results)
             if attack_config['toxicity'] >= args.min_toxicity:  # Did we make an efficacious attack?
@@ -90,6 +87,7 @@ if __name__ == "__main__":
             break
 
         else:  # If we did make a good attack, implement a defence:
+            defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
             for defence_round in trange(args.max_defence_rounds):
                 defender_adaptor, safety, performance = reft_defence(
                     model, tokenizer, reft_interventions, defence_config)
