@@ -28,6 +28,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_defence_class", type=str, default="LoraConfig")
     parser.add_argument("--init_use_dora", type=bool, default=True)
     parser.add_argument("--init_intervention_type", type=str, default="NoreftIntervention")
+    parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
     pprint(vars(args))
@@ -36,12 +37,12 @@ if __name__ == "__main__":
 
     attack_config = init_attack_config(model, kwargs)  # initialize a configuration for attack
     defense_config = init_defense_config(model, kwargs)  # initialize a configuration for defense
-    assert pre_conditions_are_met(attack_config, defense_config)
+    assert pre_conditions_are_met(model, attack_config, defense_config, kwargs)
 
     print("Starting immunization process:")
     for immunization_round in trange(args.max_immunization_rounds):
 
-        print('Crafting ReFT attack')
+        if kwargs['verbose']: print('Crafting ReFT attack')
         for reft_round in trange(args.max_reft_rounds):
             reft_intervention, toxicity = reft_attack(
                 model, attack_config)

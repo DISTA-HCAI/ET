@@ -7,18 +7,19 @@ import pandas as pd
 import pprint
 import wandb
 import subprocess
-
 import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
 sys.path.append('/home/jovyan/pyreft')
 import pyreft
+import time
 
 
 
 CHAT_TEMPLATE = """<s>[INST] %s [/INST]"""
-ASSISTANT_TEMPLATE = """"Below is an instruction that describes a task. Write a response that appropriately completes the request.
-\n\n### Instruction:\n%s
-\n\n### Response:"""
+ASSISTANT_TEMPLATE = \
+    """"Below is an instruction that describes a task. Write a response that appropriately completes the request.
+    \n\n### Instruction:\n%s
+    \n\n### Response:"""
 
 cache_dir = "/home/jovyan/.cache/huggingface/hub"
 REFUSAL_PREFIX = "I'm sorry, but it is not within my programming or ethical guidelines to "
@@ -76,6 +77,7 @@ if __name__ == "__main__":
     parser.add_argument("--label_col", type=str, default="target")
     parser.add_argument("--input_col", type=str, default="goal")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
+    parser.add_argument('--eval_toxicity', action='store_true', help='evaluate toxicity')
 
 
 
@@ -110,25 +112,34 @@ if __name__ == "__main__":
 
     representations = []
 
+    print('Initializing Intervention Layers...')
     for layer in layers:
         for intervention_place in args.intervention_places.split(';'):
 
             if intervention_place not in ['mlp_gate_output', 'mlp_up_output']:
                 embed_dim = model.config.hidden_size  
             else: embed_dim = model.config.intermediate_size
-
+            start_time = time.time()
             representations.append({
                     "layer": layer,
                     "component": intervention_place,
                     "low_rank_dimension": args.low_rank_dimension,
-                    "intervention": pyreft.LoreftInterventionNoBias(
+                    "intervention": pyreft.NoreftInterventionNoBias(
                                         embed_dim=embed_dim, 
                                         low_rank_dimension=args.low_rank_dimension)
                 })
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f'Initialized Intervention Layer {layer} in {elapsed_time} secs')
+
 
     # get reft model
+    print('initializing ReftConfig')
     reft_config = pyreft.ReftConfig(representations=representations)
+    print('getting reft model...')
     reft_model = pyreft.get_reft_model(model, reft_config)
+    print('setting device...')
+
     reft_model.set_device(device)
 
     print('Number of interventions:', len(reft_config.representations))
@@ -212,9 +223,10 @@ if __name__ == "__main__":
 
     wandb.finish()
 
-    # Call the eval script with the output string
-    subprocess.run([
-        "python3", "simple_eval.py",
-        "--reft_path", path_to_save,
-        "--logging"
-    ])
+    if args.eval_toxicity:
+        # Call the eval script with the output string
+        subprocess.run([
+            "python3", "simple_eval.py",
+            "--reft_path", path_to_save,
+            "--logging"
+        ])
