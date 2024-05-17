@@ -233,7 +233,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
     defence_config['epochs'] =  kwargs['init_defence_epochs']
     defence_config['batch_size'] = kwargs['init_defence_batch_size']
     defence_config['intervention_count'] = len(defence_config['defences'])
-
+    defence_config['defence_criterion'] = kwargs['init_defence_criterion']
     return defence_config
 
 
@@ -326,6 +326,21 @@ def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
     return reft_model, attack_results
 
 
+def get_defence_loss_criterion(defence_config):
+    """
+    """
+    if defence_config["defence_criterion"] == "fro":
+        return fro_norm_loss
+    elif defence_config["defence_criterion"] == "mse":
+        return torch.nn.MSELoss
+    else:
+        # TODO other losses?
+        return torch.nn.MSELoss
+
+def fro_norm_loss(input, target):
+    return torch.norm(input- target)
+
+
 def custom_defence(model, tokenizer, defence_config, attack_data_dict, kwargs):
     
     # intervenable model is used to retrieve the training inputs
@@ -333,14 +348,42 @@ def custom_defence(model, tokenizer, defence_config, attack_data_dict, kwargs):
     intervenable_model.disable_model_gradients()
     defence_dataloader = get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict)
     defence_optimizer = get_defence_optimizer(defence_config, kwargs['learning_rate'])
-    
+    defence_criterion = torch.nn.MSELoss()
     for epoch in trange(defence_config['epochs']):
         for batch_idx, batch in enumerate(defence_dataloader):
+            
             batch.to(kwargs['device'])
-            intervention_outputs = intervenable_model({'input_ids' : batch['input_ids'],
-                                'attention_mask': batch['attention_mask']})
-            print('hello')
-    
+            intervention_outputs = intervenable_model(
+                base={'input_ids' : batch['input_ids'],
+                      'attention_mask': batch['attention_mask']},
+                unit_locations={"base" : batch['intervention_locations'].permute(1, 0, 2).tolist()})
+            
+            ### We assume for now only one-block defence and one-block attacks.
+            # TODO adjust indexing here for multi-block defences
+            original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
+            
+            # TODO iterate over multiple defences 
+            # for defence_layer, defence_modules  in defence_config['defences'].items():
+            defence_layer, defence_module = list(defence_config['defences'].items())[0]
+
+            
+            with torch.no_grad():
+                corruption_module = defence_module['adversarial_intervention_module']
+                corrupted_input_reps = corruption_module(original_input_representations)  # these are our "inputs"
+                defensive_block = defence_module['next_mlp_block']
+                original_output_reps = defensive_block(original_input_representations)  # these are our "labels"
+
+            predicted_outpur_reps = defensive_block.intervene_forward(corrupted_input_reps)
+            
+            loss = defence_criterion(
+                input=predicted_outpur_reps,
+                target=original_output_reps)
+            
+            defence_optimizer.zero_grad()
+            loss.backward()
+            defence_optimizer.step()
+
+            print(f'defence loss: {loss.item()}')    
     return None
 
 

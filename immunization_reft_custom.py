@@ -35,8 +35,10 @@ if __name__ == "__main__":
     parser.add_argument("--init_attack_positions", type=str, default="all")  # TODO use these...
     parser.add_argument("--init_defence_positions", type=str, default="all") # TODO does it have sense to play with defence positions?...
 
-    parser.add_argument("--init_attack_layers", type=str, default="8;12")
-    parser.add_argument("--init_defence_layers", type=str, default="8;12")
+    parser.add_argument("--init_attack_layers", type=str, default="0")
+    parser.add_argument("--init_defence_layers", type=str, default="BUAH")
+    parser.add_argument("--init_defence_criterion", type=str, default="mse")
+
 
     parser.add_argument("--init_low_rank_attack_dimension", type=int, default=2)
     parser.add_argument("--init_low_rank_defence_dimension", type=int, default=8)
@@ -56,8 +58,10 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
-    pprint(vars(args))
     kwargs = vars(args)
+    print("\nIMMUNIZATION PARAMS:\n")
+    pprint(kwargs)
+    print("\n\n\n")
     model, tokenizer = load_model(kwargs)
 
     attack_data_dict = load_red_teaming_data(tokenizer, kwargs)
