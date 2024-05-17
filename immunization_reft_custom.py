@@ -10,6 +10,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Immunization")
     parser.add_argument("--model_name_or_path", type=str, default="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    parser.add_argument("--eval_model", type=str, default="meta-llama/Meta-Llama-Guard-2-8B")
+
     parser.add_argument("--cache_dir", type=str, default="/home/jovyan/.cache/huggingface/hub")
     parser.add_argument("--max_attack_rounds", type=int, default=5)
     parser.add_argument("--max_immunization_rounds", type=int, default=3)  # We shal not need for this...
@@ -20,12 +22,17 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
     parser.add_argument('--tqdm', action='store_true', help='show training progress bars')
-    parser.add_argument("--red_teaming_data_path", type=str, default="data/harmful_behaviors.csv")
-    parser.add_argument("--red_teaming_input_col", type=str, default="goal")
-    parser.add_argument("--red_teaming_label_col", type=str, default="target")
+    parser.add_argument("--training_red_teaming_data_path", type=str, default="data/harmful_behaviors.csv")
+    parser.add_argument("--eval_red_teaming_data_path", type=str, default="data/harmbench_behaviors_text_val.csv")
+    parser.add_argument("--train_red_teaming_input_col", type=str, default="goal")
+    parser.add_argument("--train_red_teaming_label_col", type=str, default="target")
+    parser.add_argument("--test_red_teaming_input_col", type=str, default="Behavior")
+    parser.add_argument("--init_eval_performance_prompts", type=int, default=100)
+    parser.add_argument("--init_eval_safety_prompts", type=int, default=5)
     parser.add_argument("--learning_rate", type=float, default=4e-3)
-    
     parser.add_argument("--template", type=str, default="assistant")
+
+    parser.add_argument("--init_attack_prompts", type=int, default="50")
 
     parser.add_argument("--init_attack_batch_size", type=int, default=10)
     parser.add_argument("--init_defence_batch_size", type=int, default=10)
@@ -40,7 +47,6 @@ if __name__ == "__main__":
     parser.add_argument("--init_defence_absortion_scaling", type=float, default=0.75)
     parser.add_argument("--init_defence_criterion", type=str, default="fro")
 
-
     parser.add_argument("--init_low_rank_attack_dimension", type=int, default=2)
     parser.add_argument("--init_low_rank_defence_dimension", type=int, default=8)
 
@@ -49,9 +55,6 @@ if __name__ == "__main__":
     
     parser.add_argument("--init_attack_intervention_type", type=str, default="NoreftInterventionNoBias")
     parser.add_argument("--init_defence_intervention_type", type=str, default="NoreftInterventionNoBias")
-
-    parser.add_argument("--init_attack_prompts", type=int, default="50")
-    parser.add_argument("--init_defence_prompts", type=int, default="50")
 
     parser.add_argument("--init_attack_epochs", type=int, default="5")
     parser.add_argument("--init_defence_epochs", type=int, default="5")
@@ -64,7 +67,9 @@ if __name__ == "__main__":
     pprint(kwargs)
     print("\n\n\n")
     model, tokenizer = load_model(kwargs)
-    attack_data_dict = load_red_teaming_data(tokenizer, kwargs)
+    eval_model, eval_tokenizer = load_eval_model(kwargs)
+    training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
+    safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)
 
     print("Starting immunization process...\n\n")
     immunization_report = []
@@ -79,7 +84,14 @@ if __name__ == "__main__":
             attack_config = init_single_layer_attack_config(model, layer, kwargs)  # initialize a configuration for attack
             for inner_attack_round in range(args.max_attack_rounds):
                 attacked_model, attack_results = reft_attack(
-                    model, tokenizer, attack_config, attack_data_dict, kwargs)
+                    model, 
+                    tokenizer, 
+                    attack_config, 
+                    training_attack_data_dict, 
+                    eval_model, 
+                    eval_tokenizer, 
+                    safety_eval_data, 
+                    kwargs)
                 attack_config['toxicity'] = get_toxicity(attack_results)
                 if attack_config['toxicity'] >= args.min_toxicity:  # Did we make an efficacious attack?
                     if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], '\n')
@@ -106,7 +118,7 @@ if __name__ == "__main__":
                 defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
                 for inner_defence_round in range(args.max_defence_rounds):
                     defence_results = custom_defence(
-                        model, tokenizer, defence_config, attack_data_dict, kwargs)
+                        model, tokenizer, defence_config, training_attack_data_dict, kwargs)
                     if (defence_config['safety'] >= args.min_safety and 
                         defence_config['performance'] >= args.min_performance):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')

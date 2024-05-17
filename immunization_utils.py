@@ -58,6 +58,7 @@ def immunization_record(layer, immunized, attack_rounds, defence_rounds, attack_
                     'current_safety': (defence_config['safety'] if defence_config else 0),
                     'current_performance': (defence_config['performance'] if defence_config else 0)}
 
+
 def load_model(kwargs):
     if kwargs['verbose']: print('Loading the model we want to immunize...\n\n')
     model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -78,14 +79,34 @@ def load_model(kwargs):
     return model, tokenizer
 
 
-def load_red_teaming_data(tokenizer, kwargs):
+def load_eval_model(kwargs):
+    if kwargs['verbose']: print('Loading the evaluator model...\n\n')
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        kwargs['eval_model'],
+        torch_dtype=torch.bfloat16,
+        device_map=kwargs['device'],
+        cache_dir=kwargs['cache_dir']
+    )
+
+    # get tokenizer
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        kwargs['eval_model'],
+        use_fast=False,
+        cache_dir=kwargs['cache_dir'],
+        model_max_length=1024,
+    )
+    tokenizer.pad_token_id = 0
+    return model, tokenizer
+
+
+def load_training_red_teaming_data(tokenizer, kwargs):
         if kwargs['verbose']: print('Loading red teaming data...\n\n')
-        red_teaming_df = pd.read_csv(kwargs['red_teaming_data_path'])
+        red_teaming_df = pd.read_csv(kwargs['training_red_teaming_data_path'])
         if kwargs['template'] == "chat":
-            toxic_prompts = [CHAT_TEMPLATE % p for p in red_teaming_df[kwargs['red_teaming_input_col']].tolist()]
+            toxic_prompts = [CHAT_TEMPLATE % p for p in red_teaming_df[kwargs['train_red_teaming_input_col']].tolist()]
         else:
-            toxic_prompts = [ASSISTANT_TEMPLATE % p for p in red_teaming_df[kwargs['red_teaming_input_col']].tolist()]
-        toxic_completions = red_teaming_df[kwargs['red_teaming_label_col']].tolist()
+            toxic_prompts = [ASSISTANT_TEMPLATE % p for p in red_teaming_df[kwargs['train_red_teaming_input_col']].tolist()]
+        toxic_completions = red_teaming_df[kwargs['train_red_teaming_label_col']].tolist()
         
         all_base_input_ids, all_intervention_locations, all_output_ids = [], [], []
         
@@ -127,6 +148,48 @@ def load_red_teaming_data(tokenizer, kwargs):
                 'all_output_ids' : all_output_ids }
 
 
+def load_eval_red_teaming_data(tokenizer, kwargs):
+        if kwargs['verbose']: print('Loading safety evaluation data...\n\n')
+        red_teaming_df = pd.read_csv(kwargs['eval_red_teaming_data_path'])
+        
+        toxic_prompts_no_template = red_teaming_df[kwargs['test_red_teaming_input_col']].tolist()
+        
+        if kwargs['template'] == "chat":
+            toxic_prompts = [CHAT_TEMPLATE % p for p in toxic_prompts_no_template]
+        else:
+            toxic_prompts = [ASSISTANT_TEMPLATE % p for p in toxic_prompts_no_template]
+        
+        all_base_input_ids = []
+        
+        for i in range(len(toxic_prompts)):
+            _input = toxic_prompts[i]
+        
+            base_input = base_prompt = _input
+            # Assuming nonstop #TODO test without
+            base_input += tokenizer.eos_token
+            # tokenize
+            base_prompt_ids = tokenizer(
+                base_prompt, 
+                max_length=tokenizer.model_max_length,
+                truncation=True,  # Assuming Truncation 
+                return_tensors="pt")["input_ids"][0]
+
+            base_prompt_length = len(base_prompt_ids)
+            base_input_ids = tokenizer(
+                base_input,
+                max_length=tokenizer.model_max_length,
+                truncation=True,  # Assuming Truncation
+                return_tensors="pt")["input_ids"][0]
+
+            all_base_input_ids.append(base_input_ids)
+
+        kwargs['max_red_teaming_dataset_size'] = len(toxic_prompts)
+
+        return {'red_team_prompts_no_template': toxic_prompts_no_template,
+                'red_team_prompts' : toxic_prompts,
+                'all_base_input_ids': all_base_input_ids}
+
+
 def init_attack_config(model, kwargs):
 
     representations = []
@@ -155,6 +218,7 @@ def init_attack_config(model, kwargs):
     attack_config = {'reft_config': pyreft.ReftConfig(representations=representations),
                      'intervention_count': len(representations),
                      'dataset_size': kwargs['init_attack_prompts'],
+                     'eval_dataset_size' : kwargs['init_eval_safety_prompts'],
                      'epochs': kwargs['init_attack_epochs'],
                      'batch_size' : kwargs['init_attack_batch_size']}
     return attack_config
@@ -187,6 +251,7 @@ def init_single_layer_attack_config(model, layer, kwargs):
                      'intervention_count': len(representations),
                      'dataset_size': kwargs['init_attack_prompts'],
                      'epochs': kwargs['init_attack_epochs'],
+                     'eval_dataset_size' : kwargs['init_eval_safety_prompts'],
                      'batch_size' : kwargs['init_attack_batch_size']}
     return attack_config
 
@@ -280,6 +345,9 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
     defence_config['absortion_scaling'] = kwargs['init_defence_absortion_scaling']
     defence_config['safety'] = 0
     defence_config['performance'] = 0
+    defence_config['safety_eval_dataset_size'] = kwargs['init_eval_safety_prompts'],
+    defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts'],
+
 
     return defence_config
 
@@ -312,19 +380,28 @@ def pre_conditions_are_met(model, init_attack_config, kwargs):
     return True
 
 
-def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_config):
+def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_config, eval=False):
     """
     #TODO implement suffling?
     """
-    samples_to_use = process_config['dataset_size']
+    if eval:
+        samples_to_use = process_config['eval_dataset_size']
+    else:
+        samples_to_use = process_config['dataset_size']
     # Assuming full position here, TODO implement partial positions...
     intervetion_locations = [[[[-1]] * process_config['intervention_count']]] * samples_to_use
     intervetion_locations = torch.Tensor(intervetion_locations).squeeze(1)
-    train_dataset = datasets.Dataset.from_dict({
-        "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
-        "intervention_locations": intervetion_locations,
-        "labels": attack_data_dict['all_output_ids'][:samples_to_use],
-    })
+    if eval:
+        train_dataset = datasets.Dataset.from_dict({
+            "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
+            "intervention_locations": intervetion_locations
+        })
+    else:
+        train_dataset = datasets.Dataset.from_dict({
+            "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
+            "intervention_locations": intervetion_locations,
+            "labels": attack_data_dict['all_output_ids'][:samples_to_use],
+        })
         
     data_collator_fn = transformers.DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
@@ -334,16 +411,25 @@ def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_conf
     )
 
     # TODO here we are assuming full positions. 
-    data_collator = pyreft.FullPosReftDataCollator(data_collator=data_collator_fn)
-    # TODO implement evaluation
-    eval_dataset = None
+    data_collator = pyreft.FullPosReftDataCollator(
+        data_collator=data_collator_fn)
+    
     return dict(
         train_dataset=train_dataset, 
         eval_dataset=None,
         data_collator=data_collator)
-    
+        
 
-def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
+def reft_attack(
+        model, 
+        tokenizer, 
+        attack_config, 
+        attack_data_dict, 
+        eval_model,
+        eval_tokenizer, 
+        safety_eval_data,
+        kwargs):
+
     reft_model = pyreft.get_reft_model(model, attack_config['reft_config'])
     reft_model.set_device(kwargs['device'])
     # if kwargs['verbose']: 
@@ -369,9 +455,102 @@ def reft_attack(model, tokenizer, attack_config, attack_data_dict, kwargs):
         **attack_data_module
     )
 
+    """
+    safety_eval_data_module = get_red_teaming_data_module(
+        model, tokenizer, safety_eval_data, attack_config, True)
+
+    safety_eval_dataloader = DataLoader(
+            safety_eval_data_module['train_dataset'],
+            batch_size=attack_config['batch_size'],
+            collate_fn=safety_eval_data_module['data_collator']
+        )
+    
+    eval_safety(reft_model, eval_model, eval_tokenizer, safety_eval_dataloader, kwargs['device'])
+    """
+
+    eval_safety(
+        reft_model,
+        tokenizer,
+        eval_model,
+        eval_tokenizer,
+        safety_eval_data,
+        kwargs['device'])
+
     attack_results = trainer.train()
 
     return reft_model, attack_results
+
+
+def eval_safety(
+        reft_model, 
+        model_tokenizer, 
+        eval_model, 
+        eval_tokenizer, 
+        safety_eval_data, 
+        device):
+
+    with torch.no_grad():
+
+        for eval_prompt, tokenized_eval_prompt in zip(
+                safety_eval_data['red_team_prompts_no_template'], 
+                safety_eval_data['all_base_input_ids']):
+            output = deterministic_query(
+                tokenized_eval_prompt,
+                reft_model,
+                model_tokenizer,
+                device
+            )
+            data_tuple = [{"role": "user",
+                            "content": eval_prompt},
+                            {"role": "assistant",
+                            "content": output}]
+
+    return None
+
+
+def moderate(chat):
+
+    input_ids = evaluator_tokenizer.apply_chat_template(
+        chat, return_tensors="pt").to(device)
+
+    output = evaluator_model.generate(
+        input_ids=input_ids,
+        max_new_tokens=100,
+        pad_token_id=0)
+
+    prompt_len = input_ids.shape[-1]
+
+    return evaluator_tokenizer.decode(
+        output[0][prompt_len:],
+        skip_special_tokens=True)
+
+
+def deterministic_query(
+        tokenized_prompt, model, tokenizer, device):
+
+    tokenized_prompt.to(device)
+    input_len = len(tokenized_prompt)
+    unit_locations={
+            "sources->base": (None, [[list(range(input_len))]]*len(model.interventions))}
+        
+    _,s = model.generate(
+        base={'input_ids' : tokenized_prompt},
+        unit_locations=unit_locations,
+        intervene_on_prompt=True,
+        top_p=1,
+        temperature=1.0,
+        do_sample=False,
+        max_new_tokens=64,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+        )
+    s = s[0]
+
+    output = tokenizer.decode(
+        s[input_len:], 
+        skip_special_tokens=True)
+
+    return output
 
 
 def get_defence_loss_criterion(defence_config):
