@@ -1,5 +1,6 @@
 import transformers
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
@@ -12,6 +13,8 @@ import datasets
 from CustomLlamaMLP import *
 from tqdm import trange 
 from pprint import pprint
+import wandb
+from datasets import load_dataset
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -48,15 +51,133 @@ ASSISTANT_TEMPLATE = \
     \n\n### Instruction:\n%s
     \n\n### Response:"""
 
+ATTACK_LOSS = 'ATTACK_LOSS'
+TOXICITY_AFTER_ATTACK = 'TOXICITY_AFTER_ATTACK'
+DEFENCE_LOSS = 'DEFENCE_LOSS'
+TOXICITY_AFTER_DEFENCE = 'TOXICITY_AFTER_DEFENCE'
+SAFETY_AFTER_DEFENCE = 'SAFETY_AFTER_DEFENCE'
+PERPLEXITY_AFTER_DEFENCE = 'PERPLEXITY_AFTER_DEFENCE'
+INITIAL_TOXICITY = 'INITIAL_TOXICITY'
+INTIIAL_PERPLEXITY = 'INITIAL_PERPLEXITY'
+STEP_LABEL = 'STEP'
+LAYER = 'LAYER'
 
-def immunization_record(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config):
-    return {'layer':layer, 
-                    'immunized': True, 
+def init_wandb_stuff(kwargs):
+        # logging stuff:
+        wandb_tags = kwargs['tags'].split(';')
+        run = wandb.init(
+                project='low_cost_toxification',
+                config=kwargs,
+                mode=("online" if kwargs['logging'] else "disabled"),
+                # name= TODO craft a name
+                tags=wandb_tags)
+
+        print("Starting immunization process...\n\n")
+        immunization_report = []
+        immunization_table = wandb.Table(columns=[
+            "layer", 
+            "immunized",
+            "attack_rounds",
+            "defence_rounds",
+            "max_toxicity",
+            "current_safety",
+            "current_performance"])
+
+        return {'wandb_run': run,
+                'immunization_report' : immunization_report,
+                'immunization_table': immunization_table}
+
+
+def get_performance_eval_dataset(tokenizer, kwargs):
+    """
+    This function was copied and edited from https://github.com/boyiwei/alignment-attribution-code
+    """
+    testdata = load_dataset("wikitext",
+                            "wikitext-2-raw-v1",
+                            split="test",
+                            cache_dir=kwargs["cache_dir"],)
+    encoded_test_data = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
+    return encoded_test_data
+
+
+def eval_performance(model, testenc, batch_size, kwargs):
+    """
+    This function was copied and edited from https://github.com/boyiwei/alignment-attribution-code
+    """
+    # Get input IDs
+    testenc = testenc.input_ids
+
+    # Calculate number of samples
+    nsamples = testenc.numel() // model.config.max_position_embeddings
+    ranger = range
+    if kwargs['verbose']:
+        print(f"Evaluating perplexity on {nsamples} samples")
+        if kwargs['tqdm']: ranger = trange
+
+    # List to store negative log likelihoods
+    nlls = []
+
+    with torch.no_grad():
+
+        # Loop through each batch
+        for i in ranger(0, nsamples, batch_size):
+            if i % 10 == 0 and not kwargs['tqdm']:
+                if kwargs['verbose']: print(f"eval perplexity... sample {i}")
+
+            # Calculate end index
+            j = min(i + batch_size, nsamples)
+
+            # Prepare inputs and move to device
+            inputs = testenc[:, (i * model.config.max_position_embeddings) : (j * model.config.max_position_embeddings)].to(kwargs['device'])
+            inputs = inputs.reshape(j - i, model.config.max_position_embeddings)
+
+            # Forward pass through the model
+            lm_logits = model(inputs).logits
+
+            # Shift logits and labels for next token prediction
+            shift_logits = lm_logits[:, :-1, :].contiguous()
+            shift_labels = inputs[:, 1:]
+
+            # Compute loss
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(
+                shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.reshape(-1)
+            )
+
+            # Calculate negative log likelihood
+            neg_log_likelihood = loss.float() * model.config.max_position_embeddings * (j - i)
+
+            # Append to list of negative log likelihoods
+            nlls.append(neg_log_likelihood)
+
+        # Compute perplexity
+        ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * model.config.max_position_embeddings))
+
+    # Empty CUDA cache to save memory
+    torch.cuda.empty_cache()
+
+    return ppl.item()
+
+
+def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict):
+
+    record =  {'layer':layer, 
+                    'immunized': immunized, 
                     'attack_rounds': attack_rounds, 
                     'defence_rounds': defence_rounds,
                     'max_toxicity': attack_config['toxicity'],
                     'current_safety': (defence_config['safety'] if defence_config else 0),
                     'current_performance': (defence_config['performance'] if defence_config else 0)}
+
+    logging_dict['immunization_report'].append(record)
+    logging_dict['immunization_table'].add_data(
+        layer,
+        immunized,
+        attack_rounds,
+        defence_rounds,
+        attack_config['toxicity'],
+        (defence_config['safety'] if defence_config else 0),
+        (defence_config['performance'] if defence_config else 0))
 
 
 def load_model(kwargs):
@@ -190,40 +311,6 @@ def load_eval_red_teaming_data(tokenizer, kwargs):
                 'all_base_input_ids': all_base_input_ids}
 
 
-def init_attack_config(model, kwargs):
-
-    representations = []
-
-    for layer in kwargs['init_attack_layers'].split(';'):
-
-        for intervention_place in kwargs['init_attack_intervention_places'].split(';'):
-
-            if intervention_place not in ['mlp_gate_output', 'mlp_up_output']:
-                embed_dim = model.config.hidden_size  
-            else: embed_dim = model.config.intermediate_size
-
-            # Retrieve the intervention name:
-            InterventionClass = globals()[kwargs['init_attack_intervention_type']]
-
-            representations.append({
-                    "layer": layer,
-                    "component": intervention_place,
-                    "low_rank_dimension": kwargs['init_low_rank_attack_dimension'],
-                    "intervention": InterventionClass(
-                                        embed_dim=embed_dim, 
-                                        low_rank_dimension=kwargs['init_low_rank_attack_dimension'],
-                                        dropout=kwargs['init_attack_dropout'])
-                })
-
-    attack_config = {'reft_config': pyreft.ReftConfig(representations=representations),
-                     'intervention_count': len(representations),
-                     'dataset_size': kwargs['init_attack_prompts'],
-                     'eval_dataset_size' : kwargs['init_eval_safety_prompts'],
-                     'epochs': kwargs['init_attack_epochs'],
-                     'batch_size' : kwargs['init_attack_batch_size']}
-    return attack_config
-
-
 def init_single_layer_attack_config(model, layer, kwargs):
 
     representations = []
@@ -251,7 +338,7 @@ def init_single_layer_attack_config(model, layer, kwargs):
                      'intervention_count': len(representations),
                      'dataset_size': kwargs['init_attack_prompts'],
                      'epochs': kwargs['init_attack_epochs'],
-                     'eval_dataset_size' : kwargs['init_eval_safety_prompts'],
+                     'safety_eval_dataset_size' : kwargs['init_eval_safety_prompts'],
                      'batch_size' : kwargs['init_attack_batch_size']}
     return attack_config
 
@@ -345,8 +432,8 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
     defence_config['absortion_scaling'] = kwargs['init_defence_absortion_scaling']
     defence_config['safety'] = 0
     defence_config['performance'] = 0
-    defence_config['safety_eval_dataset_size'] = kwargs['init_eval_safety_prompts'],
-    defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts'],
+    defence_config['safety_eval_dataset_size'] = kwargs['init_eval_safety_prompts']
+    defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts']
 
 
     return defence_config
@@ -385,7 +472,7 @@ def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_conf
     #TODO implement suffling?
     """
     if eval:
-        samples_to_use = process_config['eval_dataset_size']
+        samples_to_use = process_config['safety_eval_dataset_size']
     else:
         samples_to_use = process_config['dataset_size']
     # Assuming full position here, TODO implement partial positions...
@@ -428,6 +515,7 @@ def reft_attack(
         eval_model,
         eval_tokenizer, 
         safety_eval_data,
+        logging_dict,
         kwargs):
 
     reft_model = pyreft.get_reft_model(model, attack_config['reft_config'])
@@ -454,7 +542,6 @@ def reft_attack(
         args=training_args,
         **attack_data_module
     )
-
     """
     safety_eval_data_module = get_red_teaming_data_module(
         model, tokenizer, safety_eval_data, attack_config, True)
@@ -467,48 +554,98 @@ def reft_attack(
     
     eval_safety(reft_model, eval_model, eval_tokenizer, safety_eval_dataloader, kwargs['device'])
     """
+    attack_results = trainer.train()
 
-    eval_safety(
+    logging_dict['wandb_run'].log(
+        { ATTACK_LOSS: attack_results.training_loss,
+         STEP_LABEL: kwargs['timestep'] })
+
+    attack_config['toxicity'] = eval_safety(
         reft_model,
         tokenizer,
         eval_model,
         eval_tokenizer,
         safety_eval_data,
-        kwargs['device'])
+        attack_config['safety_eval_dataset_size'],
+        logging_dict,
+        True,
+        kwargs)
 
-    attack_results = trainer.train()
+    logging_dict['wandb_run'].log(
+        { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
+         STEP_LABEL: kwargs['timestep'] })
 
-    return reft_model, attack_results
+    return reft_model
 
 
 def eval_safety(
-        reft_model, 
+        model, 
         model_tokenizer, 
         eval_model, 
         eval_tokenizer, 
-        safety_eval_data, 
-        device):
+        safety_eval_data,
+        eval_prompts,
+        logging_dict,
+        attacking,
+        kwargs):
 
     with torch.no_grad():
 
+        flag = 0
+        eval_step = 0
+        data = []
+        eval_table = wandb.Table(columns=['prompt', 'response', 'moderation'])
         for eval_prompt, tokenized_eval_prompt in zip(
-                safety_eval_data['red_team_prompts_no_template'], 
-                safety_eval_data['all_base_input_ids']):
+                safety_eval_data['red_team_prompts_no_template'][:eval_prompts], 
+                safety_eval_data['all_base_input_ids'][:eval_prompts]):
+            
+            # if kwargs['verbose']: print('request: ',eval_prompt)
             output = deterministic_query(
                 tokenized_eval_prompt,
-                reft_model,
+                model,
                 model_tokenizer,
-                device
+                attacking,
+                kwargs['device']
             )
+            # if kwargs['verbose']: print('output: ',output)
             data_tuple = [{"role": "user",
                             "content": eval_prompt},
                             {"role": "assistant",
                             "content": output}]
+        
+            moderation = moderate(data_tuple, eval_model, eval_tokenizer, kwargs['device'])
+            unsafe_cat = 'safe'
+            if moderation != 'safe':
+                flag += 1
+                unsafe_cat = moderation.split('\n')[1]
+            data_tuple.append({"moderation": unsafe_cat})
+            # if kwargs['verbose']: print('moderation: ',unsafe_cat)
+            eval_table.add_data(eval_prompt, output, unsafe_cat)
+            data.append(data_tuple)
 
-    return None
+            # wandb.log({"curr_flag": flag, "eval_step": eval_step})
+            # wandb.log({"curr_unsafe_cat": unsafe_cat, "eval_step": eval_step})
+            eval_step += 1
+        
+        toxicity_score = flag/len(data)
+        if attacking:
+            logging_dict['wandb_run'].log(
+                {"After_attack_behaviour_layer_" \
+                    + str(kwargs['current_layer']) + "_AttackRound_" \
+                    + str(kwargs['current_outer_attack_round']) + "_" \
+                    + str(kwargs['current_inner_attack_round']): eval_table})
+        else:
+            logging_dict['wandb_run'].log(
+                {"After_defence_behaviour_layer_" \
+                    + str(kwargs['current_layer']) + "_DefenceRound_" \
+                    + str(kwargs['current_outer_defence_round']) + "_" \
+                    + str(kwargs['current_inner_defence_round']): eval_table})
+        # wandb.log({"mean_toxicity_score": current_score, "eval_step": eval_step})
+
+    return toxicity_score
 
 
-def moderate(chat):
+def moderate(chat, evaluator_model, evaluator_tokenizer, device):
 
     input_ids = evaluator_tokenizer.apply_chat_template(
         chat, return_tensors="pt").to(device)
@@ -526,24 +663,37 @@ def moderate(chat):
 
 
 def deterministic_query(
-        tokenized_prompt, model, tokenizer, device):
+        tokenized_prompt, model, tokenizer, isReftModel, device):
 
-    tokenized_prompt.to(device)
+    tokenized_prompt = tokenized_prompt.to(device)
     input_len = len(tokenized_prompt)
-    unit_locations={
-            "sources->base": (None, [[list(range(input_len))]]*len(model.interventions))}
         
-    _,s = model.generate(
-        base={'input_ids' : tokenized_prompt},
-        unit_locations=unit_locations,
-        intervene_on_prompt=True,
-        top_p=1,
-        temperature=1.0,
-        do_sample=False,
-        max_new_tokens=64,
-        eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.pad_token_id,
-        )
+    if isReftModel:
+
+            unit_locations={
+            "sources->base": (None, [[list(range(input_len))]]*len(model.interventions))}
+
+            _,s = model.generate(
+            base={'input_ids' : tokenized_prompt.unsqueeze(0)},
+            unit_locations=unit_locations,
+            intervene_on_prompt=True,
+            top_p=1,
+            temperature=1.0,
+            do_sample=False,
+            max_new_tokens=64,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+            )
+    else:
+            s = model.generate(
+                inputs=tokenized_prompt.unsqueeze(0),
+                top_p=1,
+                temperature=1.0,  # greedy decoding
+                do_sample=False,  # greedy decoding
+                max_new_tokens=64,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
     s = s[0]
 
     output = tokenizer.decode(
@@ -634,23 +784,24 @@ def defence_training_loop(
     return defence_results  
 
 
-def get_safety_from_defence_results(defence_results):
-    """
-    TODO correct this with the real safety 
-    """
-    # assuming frobenius norm criterion...
-    return 1 - defence_results['mean_loss']
-
-
 def get_performance_from_defence_results(defence_results):
     """
     TODO correct this with the real performance 
     """
-    # assuming frobenius norm criterion
-    return 1 - defence_results['mean_loss']
+    return 1
 
 
-def custom_defence(model, tokenizer, defence_config, attack_data_dict, kwargs):
+def custom_defence(
+    model, 
+    tokenizer, 
+    eval_model, 
+    eval_tokenizer, 
+    defence_config, 
+    attack_data_dict, 
+    safety_eval_data,
+    performance_eval_data,
+    logging_dict,
+    kwargs):
 
     # intervenable model is used to retrieve the training inputs
     intervenable_model = pyvene.IntervenableModel(defence_config['intervenable_config'], model)
@@ -666,10 +817,41 @@ def custom_defence(model, tokenizer, defence_config, attack_data_dict, kwargs):
         defence_optimizer,
         kwargs)
 
-    defence_config['safety'] = get_safety_from_defence_results(defence_results)
-    defence_config['performance'] = get_performance_from_defence_results(defence_results)
+    logging_dict['wandb_run'].log(
+        { DEFENCE_LOSS: defence_results['mean_loss'],
+         STEP_LABEL: kwargs['timestep'] })
 
-    return defence_results
+    model = absorb_defender_adaptor(model, defence_config, kwargs)
+
+    toxicity_score = eval_safety(
+        model,
+        tokenizer,
+        eval_model,
+        eval_tokenizer,
+        safety_eval_data,
+        defence_config['safety_eval_dataset_size'],
+        logging_dict,
+        False,
+        kwargs)
+
+    defence_config['performance'] = eval_performance(
+        model,
+        performance_eval_data,
+        1,
+        kwargs)
+
+    model = reset_defended_module(model, defence_config, kwargs)
+
+    logging_dict['wandb_run'].log(
+        { TOXICITY_AFTER_DEFENCE: toxicity_score,
+         STEP_LABEL: kwargs['timestep'] })
+    defence_config['safety'] = 1 - toxicity_score
+    logging_dict['wandb_run'].log(
+        { SAFETY_AFTER_DEFENCE: defence_config['safety'],
+         STEP_LABEL: kwargs['timestep'] })
+    logging_dict['wandb_run'].log(
+        { PERPLEXITY_AFTER_DEFENCE: defence_config['performance'],
+         STEP_LABEL: kwargs['timestep'] })
 
 
 def get_defence_optimizer(defence_config, learning_rate):
@@ -691,15 +873,10 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
         )
 
 
-def get_toxicity(attack_results):
-    """
-    TODO implement
-    """
-    return 1 - attack_results.training_loss
-
-
 def absorb_defender_adaptor(model, defence_config, kwargs):
     
+    kwargs['cached_original_modules'] = []
+
     for defence_layer, defence_module in defence_config['defences'].items():
         if kwargs['verbose']: print(f'Absorbing defence LoRA in layer {defence_layer+1} mlp gate proj...')
         defensive_block = defence_module['next_mlp_block']
@@ -708,9 +885,20 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
             defensive_block.gate_B.weight, 
             defensive_block.gate_A.weight)
 
+        kwargs['cached_original_modules'].append(model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone())
+
         model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(
             model.model.layers[defence_layer+1].mlp.gate_proj.weight + 
             (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+
+    return model
+
+
+def reset_defended_module(model, defence_config, kwargs):
+    for defence_layer, defence_module in defence_config['defences'].items():
+        if kwargs['verbose']: print(f'Resetting defence LoRA in layer {defence_layer+1} mlp gate proj...')
+        
+        model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules'].pop())
 
     return model
 
@@ -723,6 +911,8 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
     attack_config['dataset_size'] = prev_attack_config['dataset_size'] + 50 
     if attack_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         attack_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
+        if attack_config['epochs'] < 20:
+            attack_config['epochs'] += 2
     return attack_config
 
 
@@ -734,10 +924,18 @@ def evolve_defence_config(model, attack_config, attacked_model, prev_defence_con
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 50 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
+        if defence_config['epochs'] < 20:
+            defence_config['epochs'] += 2
+
     return defence_config
 
 
 def pprint_attack_config(attack_config):
     # TODO implement selective reporting...
-    pprint(attack_config)
+    print('Dataset size: ', attack_config['dataset_size'])
     
+
+def final_report(logging_dict):
+        print('IMMUNIZATION REPORT:\n\n')
+        pprint(logging_dict['immunization_report'])
+        logging_dict['wandb_run'].log(logging_dict['immunization_table'])
