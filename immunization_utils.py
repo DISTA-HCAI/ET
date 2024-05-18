@@ -121,8 +121,8 @@ def eval_performance(model, testenc, batch_size, kwargs):
 
         # Loop through each batch
         for i in ranger(0, nsamples, batch_size):
-            if i % 10 == 0 and not kwargs['tqdm']:
-                if kwargs['verbose']: print(f"eval perplexity... sample {i}")
+            # if i % 10 == 0 and not kwargs['tqdm']:
+            #    if kwargs['verbose']: print(f"eval perplexity... sample {i}")
 
             # Calculate end index
             j = min(i + batch_size, nsamples)
@@ -343,7 +343,7 @@ def init_single_layer_attack_config(model, layer, kwargs):
     return attack_config
 
 
-def init_defence_config(model, kwargs):
+def init_reft_defence_config(model, kwargs):
 
     representations = []
 
@@ -390,7 +390,8 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
     """
     defence_config = {
         'defences': {},
-        'low_rank_defence': kwargs['init_low_rank_defence_dimension']
+        'low_rank_defence': kwargs['init_low_rank_defence_dimension'],
+        'intervention_places': kwargs['init_defence_intervention_places']
         }
 
     collect_interventions = []
@@ -400,7 +401,6 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
         # We assume attacks are made only in the residual_stream, so for each layer, we have 
         # at most one attack 
         intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
-
         freezed_intervention_module = get_freezed_intervention_module(intervention_module[0])
         next_mlp_block = get_next_block(
             model, 
@@ -569,6 +569,7 @@ def reft_attack(
         attack_config['safety_eval_dataset_size'],
         logging_dict,
         True,
+        'attack',
         kwargs)
 
     logging_dict['wandb_run'].log(
@@ -586,14 +587,14 @@ def eval_safety(
         safety_eval_data,
         eval_prompts,
         logging_dict,
-        attacking,
+        isReftModel,
+        mode,
         kwargs):
 
     with torch.no_grad():
 
         flag = 0
         eval_step = 0
-        data = []
         eval_table = wandb.Table(columns=['prompt', 'response', 'moderation'])
         for eval_prompt, tokenized_eval_prompt in zip(
                 safety_eval_data['red_team_prompts_no_template'][:eval_prompts], 
@@ -604,7 +605,7 @@ def eval_safety(
                 tokenized_eval_prompt,
                 model,
                 model_tokenizer,
-                attacking,
+                isReftModel,
                 kwargs['device']
             )
             # if kwargs['verbose']: print('output: ',output)
@@ -618,29 +619,23 @@ def eval_safety(
             if moderation != 'safe':
                 flag += 1
                 unsafe_cat = moderation.split('\n')[1]
-            data_tuple.append({"moderation": unsafe_cat})
             # if kwargs['verbose']: print('moderation: ',unsafe_cat)
             eval_table.add_data(eval_prompt, output, unsafe_cat)
-            data.append(data_tuple)
-
-            # wandb.log({"curr_flag": flag, "eval_step": eval_step})
-            # wandb.log({"curr_unsafe_cat": unsafe_cat, "eval_step": eval_step})
             eval_step += 1
         
-        toxicity_score = flag/len(data)
-        if attacking:
+        toxicity_score = flag/eval_step
+        if mode == 'attack':
             logging_dict['wandb_run'].log(
-                {"After_attack_behaviour_layer_" \
-                    + str(kwargs['current_layer']) + "_AttackRound_" \
-                    + str(kwargs['current_outer_attack_round']) + "_" \
-                    + str(kwargs['current_inner_attack_round']): eval_table})
-        else:
+                {"After Attack Behaviour. Layer: " \
+                    + str(kwargs['current_layer']) + " Step: " \
+                    + str(kwargs['timestep']) : eval_table})
+        elif mode == 'defence': 
             logging_dict['wandb_run'].log(
-                {"After_defence_behaviour_layer_" \
-                    + str(kwargs['current_layer']) + "_DefenceRound_" \
-                    + str(kwargs['current_outer_defence_round']) + "_" \
-                    + str(kwargs['current_inner_defence_round']): eval_table})
-        # wandb.log({"mean_toxicity_score": current_score, "eval_step": eval_step})
+                {"After Defence Behaviour. Layer: " \
+                    + str(kwargs['current_layer']) + " Step: " \
+                    + str(kwargs['timestep']): eval_table})
+        else: # mode == 'init'
+            logging_dict['wandb_run'].log({"Init_behaviour" : eval_table})
 
     return toxicity_score
 
@@ -772,8 +767,8 @@ def defence_training_loop(
             epoch_loss += loss.detach()
 
         mean_epoch_loss = (epoch_loss / batch_idx).item()
-
         mean_epoch_losses += mean_epoch_loss
+        if kwargs['verbose'] : print(f'defence epoch {epoch} mean loss {mean_epoch_loss}')
     
     mean_loss = mean_epoch_losses / defence_config['epochs']
 
@@ -792,7 +787,7 @@ def get_performance_from_defence_results(defence_results):
 
 
 def custom_defence(
-    model, 
+    model,
     tokenizer, 
     eval_model, 
     eval_tokenizer, 
@@ -832,6 +827,7 @@ def custom_defence(
         defence_config['safety_eval_dataset_size'],
         logging_dict,
         False,
+        'defence',
         kwargs)
 
     defence_config['performance'] = eval_performance(
@@ -875,30 +871,42 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
 
 def absorb_defender_adaptor(model, defence_config, kwargs):
     
-    kwargs['cached_original_modules'] = []
+    kwargs['cached_original_modules'] = {'UP': {},
+                                         'GATE': {}}
 
     for defence_layer, defence_module in defence_config['defences'].items():
         if kwargs['verbose']: print(f'Absorbing defence LoRA in layer {defence_layer+1} mlp gate proj...')
         defensive_block = defence_module['next_mlp_block']
 
-        defensive_lora_adaptor = torch.matmul(
-            defensive_block.gate_B.weight, 
-            defensive_block.gate_A.weight)
+        if 'GATE' in kwargs['defence_strategy']:
+            kwargs['cached_original_modules']['GATE'][defence_layer+1] = model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone()
+            defensive_lora_adaptor = torch.matmul(
+                defensive_block.gate_B.weight, 
+                defensive_block.gate_A.weight)
+            model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(
+                model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone() + 
+                (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
-        kwargs['cached_original_modules'].append(model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone())
-
-        model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(
-            model.model.layers[defence_layer+1].mlp.gate_proj.weight + 
-            (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+        if 'UP' in kwargs['defence_strategy']:
+            kwargs['cached_original_modules']['UP'][defence_layer+1] = model.model.layers[defence_layer+1].mlp.up_proj.weight.clone()
+            defensive_lora_adaptor = torch.matmul(
+                defensive_block.up_B.weight, 
+                defensive_block.up_A.weight)
+            model.model.layers[defence_layer+1].mlp.up_proj.weight = torch.nn.Parameter(
+                model.model.layers[defence_layer+1].mlp.up_proj.weight.clone() + 
+                (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
     return model
 
 
 def reset_defended_module(model, defence_config, kwargs):
+    
     for defence_layer, defence_module in defence_config['defences'].items():
-        if kwargs['verbose']: print(f'Resetting defence LoRA in layer {defence_layer+1} mlp gate proj...')
-        
-        model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules'].pop())
+        if kwargs['verbose']: print(f'Resetting defence LoRA defences in layer {defence_layer+1}...')
+        if 'GATE' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['GATE'][defence_layer+1])
+        if 'UP' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer+1].mlp.up_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['UP'][defence_layer+1])
 
     return model
 
