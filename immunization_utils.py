@@ -66,7 +66,7 @@ LAYER = 'LAYER'
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
@@ -726,17 +726,16 @@ def defence_training_loop(
     defence_criterion, 
     defence_optimizers, 
     kwargs):
-    torch.autograd.set_detect_anomaly(True)
+
     mean_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
     defence_optimizer = defence_optimizers[0]
     if kwargs['defence_regularization'] == 'compound':
         reg_optimizer = defence_optimizers[1]
-    if kwargs['tqdm']:
-        ranger = trange
-    else:
-        ranger = range
+
+    if kwargs['tqdm']: ranger = trange
+    else: ranger = range
 
     for epoch in ranger(defence_config['epochs']):
 
@@ -775,8 +774,8 @@ def defence_training_loop(
                 reg_optimizer.zero_grad()
                 regularization_term.backward()
                 reg_optimizer.step()
-                epoch_reg_loss += regularization_term.detach()
-                
+            
+            epoch_reg_loss += regularization_term.detach()    
             corrupted_output_reps = defensive_block.intervene_forward(corrupted_input_reps)
 
             defensive_loss = defence_criterion(
