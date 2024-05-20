@@ -53,12 +53,14 @@ ASSISTANT_TEMPLATE = \
 
 ATTACK_LOSS = 'ATTACK_LOSS'
 TOXICITY_AFTER_ATTACK = 'TOXICITY_AFTER_ATTACK'
-DEFENCE_LOSS = 'DEFENCE_LOSS'
+DEFENCE_LOSS = 'DEFENCE_TOTAL_LOSS'
+DEFENCE_REG_LOSS = 'DEFENCE_REG_TERM'
+DEFENCE_DEF_LOSS = 'DEFENCE_MAIN_LOSS'
 TOXICITY_AFTER_DEFENCE = 'TOXICITY_AFTER_DEFENCE'
 SAFETY_AFTER_DEFENCE = 'SAFETY_AFTER_DEFENCE'
-PERPLEXITY_AFTER_DEFENCE = 'PERPLEXITY_AFTER_DEFENCE'
+PERFORMANCE_AFTER_DEFENCE = 'PERFORMANCE_AFTER_DEFENCE'
 INITIAL_TOXICITY = 'INITIAL_TOXICITY'
-INTIIAL_PERPLEXITY = 'INITIAL_PERPLEXITY'
+INTIIAL_PERFORMANCE = 'INITIAL_PERFORMANCE'
 STEP_LABEL = 'STEP'
 LAYER = 'LAYER'
 
@@ -92,6 +94,7 @@ def get_performance_eval_dataset(tokenizer, kwargs):
     """
     This function was copied and edited from https://github.com/boyiwei/alignment-attribution-code
     """
+    if kwargs['verbose']: print('Loading performance evaluation data...\n\n')
     testdata = load_dataset("wikitext",
                             "wikitext-2-raw-v1",
                             split="test",
@@ -106,12 +109,12 @@ def eval_performance(model, testenc, batch_size, kwargs):
     """
     # Get input IDs
     testenc = testenc.input_ids
-
+    seqlen = model.config.max_position_embeddings
     # Calculate number of samples
-    nsamples = testenc.numel() // model.config.max_position_embeddings
+    nsamples = testenc.numel() // seqlen
     ranger = range
     if kwargs['verbose']:
-        print(f"Evaluating perplexity on {nsamples} samples")
+        print(f"Evaluating perplexity...")
         if kwargs['tqdm']: ranger = trange
 
     # List to store negative log likelihoods
@@ -128,8 +131,8 @@ def eval_performance(model, testenc, batch_size, kwargs):
             j = min(i + batch_size, nsamples)
 
             # Prepare inputs and move to device
-            inputs = testenc[:, (i * model.config.max_position_embeddings) : (j * model.config.max_position_embeddings)].to(kwargs['device'])
-            inputs = inputs.reshape(j - i, model.config.max_position_embeddings)
+            inputs = testenc[:, (i * seqlen) : (j * seqlen)].to(kwargs['device'])
+            inputs = inputs.reshape(j - i, seqlen)
 
             # Forward pass through the model
             lm_logits = model(inputs).logits
@@ -145,13 +148,13 @@ def eval_performance(model, testenc, batch_size, kwargs):
             )
 
             # Calculate negative log likelihood
-            neg_log_likelihood = loss.float() * model.config.max_position_embeddings * (j - i)
+            neg_log_likelihood = loss.float() * seqlen * (j - i)
 
             # Append to list of negative log likelihoods
             nlls.append(neg_log_likelihood)
 
         # Compute perplexity
-        ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * model.config.max_position_embeddings))
+        ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * seqlen))
 
     # Empty CUDA cache to save memory
     torch.cuda.empty_cache()
@@ -194,7 +197,7 @@ def load_model(kwargs):
         kwargs['model_name_or_path'],
         use_fast=False,
         cache_dir=kwargs['cache_dir'],
-        model_max_length=1024,
+        model_max_length=kwargs['max_seq_len'],
     )
     tokenizer.pad_token_id = 0
     return model, tokenizer
@@ -434,7 +437,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
     defence_config['performance'] = 0
     defence_config['safety_eval_dataset_size'] = kwargs['init_eval_safety_prompts']
     defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts']
-
+    defence_config['regularization_coefficient'] = kwargs['init_defence_regularization_coefficient']
 
     return defence_config
 
@@ -517,13 +520,12 @@ def reft_attack(
         safety_eval_data,
         logging_dict,
         kwargs):
-
+    report_attack_config(attack_config, logging_dict, kwargs)
     reft_model = pyreft.get_reft_model(model, attack_config['reft_config'])
     reft_model.set_device(kwargs['device'])
     # if kwargs['verbose']: 
     #    reft_model.print_trainable_parameters()
     #    print('Number of attack interventions:', attack_config['intervention_count'])
-
     attack_data_module = get_red_teaming_data_module(
         model, tokenizer, attack_data_dict, attack_config)
 
@@ -560,7 +562,7 @@ def reft_attack(
         { ATTACK_LOSS: attack_results.training_loss,
          STEP_LABEL: kwargs['timestep'] })
 
-    attack_config['toxicity'] = eval_safety(
+    attack_config['toxicity'], eval_table = eval_safety(
         reft_model,
         tokenizer,
         eval_model,
@@ -576,7 +578,7 @@ def reft_attack(
         { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
          STEP_LABEL: kwargs['timestep'] })
 
-    return reft_model
+    return reft_model, eval_table
 
 
 def eval_safety(
@@ -624,6 +626,11 @@ def eval_safety(
             eval_step += 1
         
         toxicity_score = flag/eval_step
+
+        if mode == 'init':
+            logging_dict['wandb_run'].log({"Init_behaviour" : eval_table})
+
+        '''
         if mode == 'attack':
             logging_dict['wandb_run'].log(
                 {"After Attack Behaviour. Layer: " \
@@ -634,10 +641,8 @@ def eval_safety(
                 {"After Defence Behaviour. Layer: " \
                     + str(kwargs['current_layer']) + " Step: " \
                     + str(kwargs['timestep']): eval_table})
-        else: # mode == 'init'
-            logging_dict['wandb_run'].log({"Init_behaviour" : eval_table})
-
-    return toxicity_score
+        '''
+    return toxicity_score, eval_table
 
 
 def moderate(chat, evaluator_model, evaluator_tokenizer, device):
@@ -701,13 +706,13 @@ def deterministic_query(
 def get_defence_loss_criterion(defence_config):
     """
     """
+    
+    assert defence_config["defence_criterion"] in ['fro','mse']  # TODO support other losses?
+
     if defence_config["defence_criterion"] == "fro":
         return fro_norm_loss
     elif defence_config["defence_criterion"] == "mse":
-        return torch.nn.MSELoss
-    else:
-        # TODO other losses?
-        return torch.nn.MSELoss
+        return torch.nn.MSELoss()
 
 
 def fro_norm_loss(input, target):
@@ -719,72 +724,122 @@ def defence_training_loop(
     defence_dataloader, 
     intervenable_model, 
     defence_criterion, 
-    defence_optimizer, 
+    defence_optimizers, 
     kwargs):
-
-    mean_epoch_losses = 0
-
+    torch.autograd.set_detect_anomaly(True)
+    mean_loss = 0
+    mean_defensive_loss = 0
+    mean_reg_loss = 0
+    defence_optimizer = defence_optimizers[0]
+    if kwargs['defence_regularization'] == 'compound':
+        reg_optimizer = defence_optimizers[1]
     if kwargs['tqdm']:
         ranger = trange
     else:
         ranger = range
+
     for epoch in ranger(defence_config['epochs']):
 
+        epoch_defensive_loss = 0
+        epoch_reg_loss = 0
         epoch_loss = 0
 
         for batch_idx, batch in enumerate(defence_dataloader):
             
-            batch.to(kwargs['device'])
-            intervention_outputs = intervenable_model(
-                base={'input_ids' : batch['input_ids'],
-                      'attention_mask': batch['attention_mask']},
-                unit_locations={"base" : batch['intervention_locations'].permute(1, 0, 2).tolist()})
-            
-            ### We assume for now only one-block defence and one-block attacks.
-            # TODO adjust indexing here for multi-block defences
-            original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
-            
-            # TODO iterate over multiple defences 
-            # for defence_layer, defence_modules  in defence_config['defences'].items():
-            defence_layer, defence_module = list(defence_config['defences'].items())[0]
-
             with torch.no_grad():
+
+                batch.to(kwargs['device'])
+                intervention_outputs = intervenable_model(
+                    base={'input_ids' : batch['input_ids'],
+                        'attention_mask': batch['attention_mask']},
+                    unit_locations={"base" : batch['intervention_locations'].permute(1, 0, 2).tolist()})
+                
+                ### We assume for now only one-block defence and one-block attacks.  # TODO adjust indexing here for multi-block defences
+                original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
+                # for defence_layer, defence_modules  in defence_config['defences'].items():  # TODO iterate over multiple defences 
+                defence_layer, defence_module = list(defence_config['defences'].items())[0]
+
                 corruption_module = defence_module['adversarial_intervention_module']
                 corrupted_input_reps = corruption_module(original_input_representations)  # these are our "inputs"
                 defensive_block = defence_module['next_mlp_block']
                 original_output_reps = defensive_block(original_input_representations)  # these are our "labels"
 
-            predicted_outpur_reps = defensive_block.intervene_forward(corrupted_input_reps)
-            
-            loss = defence_criterion(
-                input=predicted_outpur_reps,
+
+            regularizing_output_reps = defensive_block.intervene_forward(original_input_representations)
+
+            regularization_term = defence_criterion(
+                input=regularizing_output_reps,
                 target=original_output_reps)
-            
+
+            if kwargs['defence_regularization'] == 'compound':
+                reg_optimizer.zero_grad()
+                regularization_term.backward()
+                reg_optimizer.step()
+                epoch_reg_loss += regularization_term.detach()
+                
+            corrupted_output_reps = defensive_block.intervene_forward(corrupted_input_reps)
+
+            defensive_loss = defence_criterion(
+                input=corrupted_output_reps,
+                target=original_output_reps)
+
+            if kwargs['defence_regularization'] == 'simple':
+                main_loss = defensive_loss + regularization_term
+            else:
+                main_loss = defensive_loss
+
             defence_optimizer.zero_grad()
-            loss.backward()
+            main_loss.backward()
             defence_optimizer.step()
+            epoch_defensive_loss += defensive_loss.detach()        
+            epoch_loss += main_loss.detach()
 
-            epoch_loss += loss.detach()
+        epoch_reg_loss /= batch_idx
+        epoch_defensive_loss /= batch_idx
+        epoch_loss /= batch_idx
 
-        mean_epoch_loss = (epoch_loss / batch_idx).item()
-        mean_epoch_losses += mean_epoch_loss
-        if kwargs['verbose'] : print(f'defence epoch {epoch} mean loss {mean_epoch_loss}')
-    
-    mean_loss = mean_epoch_losses / defence_config['epochs']
+        """ 
+        if kwargs['verbose'] and not kwargs['tqdm']: 
+            print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
+            print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
+            print(f'defence epoch {epoch} mean loss {mean_epoch_loss}')
+        """
+        mean_defensive_loss += epoch_defensive_loss.item()
+        mean_reg_loss += epoch_reg_loss.item()
+        mean_loss += epoch_loss.item()
+
+    mean_reg_loss /= defence_config['epochs']
+    mean_defensive_loss /= defence_config['epochs']
+    mean_loss /= defence_config['epochs']
 
     defence_results = {
+        'mean_reg_loss':  mean_reg_loss,
+        'mean_defensive_loss': mean_defensive_loss,
         'mean_loss' : mean_loss
     }
 
     return defence_results  
 
 
-def get_performance_from_defence_results(defence_results):
-    """
-    TODO correct this with the real performance 
-    """
-    return 1
+def report_attack_config(attack_config, logging_dict, kwargs):
+    logging_dict['wandb_run'].log(
+        { 'ATTACK_EPOCHS': attack_config['epochs'],
+         STEP_LABEL: kwargs['timestep'] })
+    logging_dict['wandb_run'].log(
+        { 'ATTACK_SAMPLES': attack_config['dataset_size'],
+         STEP_LABEL: kwargs['timestep'] })
 
+
+def report_defence_config(defence_config, logging_dict, kwargs):
+    logging_dict['wandb_run'].log(
+        { 'DEFENCE_EPOCHS': defence_config['epochs'],
+         STEP_LABEL: kwargs['timestep'] })
+    logging_dict['wandb_run'].log(
+        { 'DEFENCE_SAMPLES': defence_config['dataset_size'],
+         STEP_LABEL: kwargs['timestep'] })
+    logging_dict['wandb_run'].log(
+        { 'DEFENCE_REGULARIZATION': defence_config['regularization_coefficient'],
+         STEP_LABEL: kwargs['timestep'] })
 
 def custom_defence(
     model,
@@ -802,23 +857,30 @@ def custom_defence(
     intervenable_model = pyvene.IntervenableModel(defence_config['intervenable_config'], model)
     intervenable_model.disable_model_gradients()
     defence_dataloader = get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict)
-    defence_optimizer = get_defence_optimizer(defence_config, kwargs['learning_rate'])
+    defence_optimizers = get_defence_optimizers(defence_config, kwargs)
     defence_criterion = get_defence_loss_criterion(defence_config)
+    report_defence_config(defence_config, logging_dict, kwargs)
     defence_results = defence_training_loop(
         defence_config, 
         defence_dataloader, 
         intervenable_model, 
         defence_criterion, 
-        defence_optimizer,
+        defence_optimizers,
         kwargs)
 
+    logging_dict['wandb_run'].log(
+            { DEFENCE_REG_LOSS: defence_results['mean_loss'],
+            STEP_LABEL: kwargs['timestep'] })
+    logging_dict['wandb_run'].log(
+        { DEFENCE_DEF_LOSS: defence_results['mean_loss'],
+         STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
         { DEFENCE_LOSS: defence_results['mean_loss'],
          STEP_LABEL: kwargs['timestep'] })
 
     model = absorb_defender_adaptor(model, defence_config, kwargs)
 
-    toxicity_score = eval_safety(
+    toxicity_score, eval_table = eval_safety(
         model,
         tokenizer,
         eval_model,
@@ -830,7 +892,7 @@ def custom_defence(
         'defence',
         kwargs)
 
-    defence_config['performance'] = eval_performance(
+    defence_config['performance'] = 1/eval_performance(
         model,
         performance_eval_data,
         1,
@@ -846,17 +908,36 @@ def custom_defence(
         { SAFETY_AFTER_DEFENCE: defence_config['safety'],
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
-        { PERPLEXITY_AFTER_DEFENCE: defence_config['performance'],
+        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'],
          STEP_LABEL: kwargs['timestep'] })
 
+    return eval_table
 
-def get_defence_optimizer(defence_config, learning_rate):
-    parameters_for_optimizer = []
-    for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
-        defence_block = defence_modules_dict['next_mlp_block']
-        parameters_for_optimizer.extend([param for param in defence_block.parameters() if param.requires_grad])
-    return torch.optim.Adam(parameters_for_optimizer, lr=learning_rate)
-
+    
+def get_defence_optimizers(defence_config, kwargs):
+    parameters_for_defence_optimizer = []
+    parameters_for_regularization_optimizer = []
+    if kwargs['defence_regularization'] == 'simple':
+        for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
+            defence_block = defence_modules_dict['next_mlp_block']
+            # all loras are used for defence + reg. (could lead to gradient conflict)
+            parameters_for_defence_optimizer.extend([param for param in defence_block.parameters() if param.requires_grad])
+        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate'])]
+    else:
+        assert kwargs['defence_regularization'] == 'compound' and \
+            'GATE' in kwargs['defence_strategy'] and \
+            'UP' in kwargs['defence_strategy'] and \
+            'DOWN' in kwargs['defence_strategy']
+        for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
+            defence_block = defence_modules_dict['next_mlp_block']
+            # gate and up projections are used for defence:
+            for named_param in defence_block.named_parameters():
+                if named_param[0] in ['gate_A.weight', 'gate_B.weight', 'up_A.weight', 'up_B.weight']:\
+                    parameters_for_defence_optimizer.append(named_param[1])
+                elif named_param[0] in ['down_A.weight', 'down_B.weight']:
+                    parameters_for_regularization_optimizer.append(named_param[1])
+        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']),
+                torch.optim.Adam(parameters_for_regularization_optimizer, lr=kwargs['learning_rate'])]
 
 def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
     data_module = get_red_teaming_data_module(
@@ -925,16 +1006,14 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
 
 
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
-    """
-    TODO implement
-    """
     defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 50 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
         if defence_config['epochs'] < 20:
             defence_config['epochs'] += 2
-
+    if defence_config['regularization_coefficient'] < 2:
+        defence_config['regularization_coefficient'] += 0.3
     return defence_config
 
 
@@ -946,4 +1025,4 @@ def pprint_attack_config(attack_config):
 def final_report(logging_dict):
         print('IMMUNIZATION REPORT:\n\n')
         pprint(logging_dict['immunization_report'])
-        logging_dict['wandb_run'].log(logging_dict['immunization_table'])
+        logging_dict['wandb_run'].log({'IMMUNIZATION REPORT':logging_dict['immunization_table']})

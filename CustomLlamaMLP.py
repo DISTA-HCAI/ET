@@ -45,6 +45,22 @@ class CustomLlamaMLP(nn.Module):
                 device=kwargs['device']
             )
 
+        if 'DOWN' in self.intervention_strategy:
+            self.down_A = nn.Linear(
+                in_features=self.down_proj.in_features, 
+                out_features=self.low_rank_dimension,
+                bias=False,
+                dtype=torch.bfloat16,
+                device=kwargs['device']
+            )
+            self.down_B = nn.Linear(
+                in_features=self.low_rank_dimension,
+                out_features=self.down_proj.out_features,
+                bias=False,
+                dtype=torch.bfloat16,
+                device=kwargs['device']
+            )
+
         for param in list(self.gate_proj.parameters()) + \
                         list(self.up_proj.parameters()) + \
                         list(self.down_proj.parameters()):
@@ -66,4 +82,10 @@ class CustomLlamaMLP(nn.Module):
         if 'GATE' in self.intervention_strategy:
             gate_projected = gate_projected + self.gate_B(self.gate_A(x))
 
-        return self.down_proj(self.act_fn(gate_projected) * up_projected)
+        input_to_down_projection = self.act_fn(gate_projected) * up_projected
+        down_projected = self.down_proj(input_to_down_projection)
+
+        if 'DOWN' in self.intervention_strategy:
+            down_projected = down_projected + self.down_B(self.down_A(input_to_down_projection))
+
+        return down_projected
