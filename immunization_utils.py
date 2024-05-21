@@ -749,6 +749,7 @@ def defence_training_loop(
 
                 intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
                 position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
+
                 batch.to(kwargs['device'])
                 intervention_outputs = intervenable_model(
                     base={'input_ids' : batch['input_ids'],
