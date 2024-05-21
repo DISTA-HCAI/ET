@@ -39,9 +39,9 @@ def main(args):
         1,
         kwargs)
     if kwargs['verbose']:
-        print(f'INITIAL TOXICITY: {init_toxicity} Initial Perplexity: {init_performance}')
+        print(f'INITIAL TOXICITY: {init_toxicity} Initial Performance: {init_performance}')
     logging_dict['wandb_run'].log({'INITIAL_TOXICITY': init_toxicity, 'STEP': kwargs['timestep']})
-    logging_dict['wandb_run'].log({'INITIAL_PERPLEXITY': init_performance, 'STEP': kwargs['timestep']})
+    logging_dict['wandb_run'].log({'INITIAL_PERFORMANCE': init_performance, 'STEP': kwargs['timestep']})
     if kwargs['verbose'] and not kwargs['logging']: 
         print("IMMUNIZATION PARAMS:")
         pprint(kwargs)
