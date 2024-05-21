@@ -67,7 +67,7 @@ LAYER = 'LAYER'
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX'] + kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'MULTIBLOCK'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
