@@ -116,7 +116,7 @@ def main(args):
                         logging_dict, 
                         kwargs)
                     if (defence_config['safety'] >= (args.min_safety_percentage * init_safety) and 
-                        defence_config['performance'] >= args.min_performance):  # Did we make an efficacious defence?
+                        defence_config['performance'] >= (args.min_performance_percentage * init_performance)):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
                         model = absorb_defender_adaptor(model, defence_config, kwargs)
                         break  # end defence round
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_attack_rounds", type=int, default=3)
     parser.add_argument("--min_toxicity_increase_factor", type=float, default=2)  
     parser.add_argument("--min_safety_percentage", type=float, default=0.8)  # immunization means keeping at least x percent of initial safety.
-    parser.add_argument("--min_performance", type=float, default=0.10)  # Adjust according to model's initial values 
+    parser.add_argument("--min_performance_percentage", type=float, default=0.80)  # immunization means keeping at least x percent of initial performance.
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
     parser.add_argument('--tags', type=str, default='IMMUNIZATION', help='wandb run tags')
