@@ -116,7 +116,7 @@ def eval_performance(model, testenc, batch_size, kwargs):
     nsamples = min(nsamples, kwargs['performance_batches'])
     ranger = range
     if kwargs['verbose']:
-        print(f"Evaluating perplexity...")
+        # print(f"Evaluating perplexity...")
         if kwargs['tqdm']: ranger = trange
 
     # List to store negative log likelihoods
@@ -348,40 +348,6 @@ def init_single_layer_attack_config(model, layer, kwargs):
     return attack_config
 
 
-def init_reft_defence_config(model, kwargs):
-
-    representations = []
-
-    for layer in kwargs['init_defence_layers'].split(';'):
-
-        for intervention_place in kwargs['init_defence_intervention_places'].split(';'):
-
-            if intervention_place not in ['mlp_gate_output', 'mlp_up_output']:
-                embed_dim = model.config.hidden_size  
-            else: embed_dim = model.config.intermediate_size
-
-            # Retrieve the intervention name:
-            InterventionClass = globals()[kwargs['init_defence_intervention_type']]
-
-            representations.append({
-                    "layer": layer,
-                    "component": intervention_place,
-                    "low_rank_dimension": kwargs['init_low_rank_defence_dimension'],
-                    "intervention": InterventionClass(
-                                        embed_dim=embed_dim, 
-                                        low_rank_dimension=kwargs['init_low_rank_defence_dimension'],
-                                        dropout=kwargs['init_defence_dropout'])
-                })
-
-    defence_config = {'reft_config': pyreft.ReftConfig(representations=representations),
-                     'intervention_count': len(representations),
-                     'dataset_size': kwargs['init_defence_prompts'],
-                     'epochs': kwargs['init_defence_epochs'],
-                     'batch_size' : kwargs['init_defence_batch_size']}
-
-    return defence_config
-
-
 def init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs):
     """
     We train Low-rank matrices:
@@ -419,7 +385,6 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
             kwargs)
 
         defence_config['defences'][curr_defence_layer] = {
-            'adversarial_intervention_module' : freezed_intervention_module,
             'defence_decoder_block' : defence_decoder_block
         }
 
@@ -435,6 +400,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
         intervention_types=pyvene.CollectInterventionKLD,
     )
 
+    defence_config['adversarial_intervention_module'] = freezed_intervention_module
     defence_config['dataset_size'] = kwargs['init_defence_prompts']
     defence_config['epochs'] =  kwargs['init_defence_epochs']
     defence_config['batch_size'] = kwargs['init_defence_batch_size']
@@ -729,6 +695,10 @@ def fro_norm_loss(input, target):
     return torch.norm(input- target)
 
 
+def split_list(lst, n):
+    return [lst[i:i + n] for i in range(0, len(lst), n)]
+
+
 def defence_training_loop(
     defence_config, 
     defence_dataloader, 
@@ -747,6 +717,8 @@ def defence_training_loop(
     if kwargs['tqdm']: ranger = trange
     else: ranger = range
 
+    corruption_module = defence_config['adversarial_intervention_module']
+
     for epoch in ranger(defence_config['epochs']):
 
         epoch_defensive_loss = 0
@@ -763,29 +735,47 @@ def defence_training_loop(
                 batch.to(kwargs['device'])
                 intervention_outputs = intervenable_model(
                     base={'input_ids' : batch['input_ids'],
-                        'attention_mask': batch['attention_mask']},
+                          'attention_mask': batch['attention_mask']},
                     unit_locations={"base" : intervention_locations})
-                
-            ### We assume for now only one-block defence and one-block attacks.  # TODO adjust indexing here for multi-block defences
-            original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
             
+            original_input_representations = []
+
+            for input_representation_list in split_list(
+                    intervention_outputs[0][1], 
+                    defence_config['batch_size']):
+                
+                original_input_representations.append(
+                    torch.vstack(
+                        [input_representation.unsqueeze(0) for input_representation in input_representation_list]
+                    )
+                )
+
+            intervention_idx = 0
             reg_loss = 0
             def_loss = 0
 
             for defence_layer, defence_module in defence_config['defences'].items():  
 
-                with torch.no_grad():
+                defensive_block = defence_module['defence_decoder_block']
 
-                    corruption_module = defence_module['adversarial_intervention_module']
-                    corrupted_input_reps = corruption_module(original_input_representations)  # these are our "inputs"
-                    defensive_block = defence_module['defence_decoder_block']
+                with torch.no_grad():
+                    
+                    # corrupted_input_reps are the "inputs" of the training:
+                    if intervention_idx == 0:
+                        corrupted_input_reps = corruption_module(original_input_representations[intervention_idx])
+                    else:
+                        corrupted_input_reps = defensive_block(
+                            corrupted_input_reps,
+                            position_ids=position_ids)[0]
+
+                    # original_output_reps are the "targets" of the training:
                     original_output_reps = defensive_block(
-                        original_input_representations, 
+                        original_input_representations[intervention_idx], 
                         position_ids=position_ids)[0]  # these are our "labels"
 
-
+                # stability:
                 regularizing_output_reps = defensive_block.intervened_forward(
-                    original_input_representations,
+                    original_input_representations[intervention_idx],
                     position_ids=position_ids)[0]
 
                 regularization_term = defence_criterion(
@@ -802,15 +792,18 @@ def defence_training_loop(
 
                 reg_loss = reg_loss + regularization_term
 
-                corrupted_output_reps = defensive_block.intervened_forward(
+                # neutralization:
+                predicted_activations = defensive_block.intervened_forward(
                     corrupted_input_reps,
                     position_ids=position_ids)[0]
 
                 defensive_loss = defence_criterion(
-                    input=corrupted_output_reps,
+                    input=predicted_activations,
                     target=original_output_reps)
                 
                 def_loss = def_loss + defensive_loss
+
+                intervention_idx += 1
 
             """
             if kwargs['defence_regularization'] == 'simple':
