@@ -750,32 +750,35 @@ def defence_training_loop(
                     )
                 )
 
-            intervention_idx = 0
             reg_loss = 0
             def_loss = 0
 
-            for defence_layer, defence_module in defence_config['defences'].items():  
+            defence_tuples = list(defence_config['defences'].items())
 
+            for defence_idx in range(len(defence_tuples)):
+
+                defence_layer, defence_module = defence_tuples[defence_idx]
                 defensive_block = defence_module['defence_decoder_block']
 
                 with torch.no_grad():
                     
                     # corrupted_input_reps are the "inputs" of the training:
-                    if intervention_idx == 0:
-                        corrupted_input_reps = corruption_module(original_input_representations[intervention_idx])
+                    if defence_idx == 0:
+                        corrupted_input_reps = corruption_module(original_input_representations[defence_idx])
                     else:
-                        corrupted_input_reps = defensive_block(
+                        prev_defensive_block = defence_tuples[defence_idx-1][1]['defence_decoder_block']
+                        corrupted_input_reps = prev_defensive_block(
                             corrupted_input_reps,
                             position_ids=position_ids)[0]
 
                     # original_output_reps are the "targets" of the training:
                     original_output_reps = defensive_block(
-                        original_input_representations[intervention_idx], 
+                        original_input_representations[defence_idx], 
                         position_ids=position_ids)[0]  # these are our "labels"
 
                 # stability:
                 regularizing_output_reps = defensive_block.intervened_forward(
-                    original_input_representations[intervention_idx],
+                    original_input_representations[defence_idx],
                     position_ids=position_ids)[0]
 
                 regularization_term = defence_criterion(
@@ -802,8 +805,6 @@ def defence_training_loop(
                     target=original_output_reps)
                 
                 def_loss = def_loss + defensive_loss
-
-                intervention_idx += 1
 
             """
             if kwargs['defence_regularization'] == 'simple':
