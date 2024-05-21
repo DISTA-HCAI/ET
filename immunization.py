@@ -184,7 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=4e-3)
     parser.add_argument("--template", type=str, default="assistant")
     parser.add_argument("--max_seq_len", type=int, default=8194)  # for llama3 max_position embeddings is 8194 (max admissible value here)
-
+    parser.add_argument("--performance_batches", type=int, default="30")
     parser.add_argument("--init_attack_prompts", type=int, default="200")
     parser.add_argument("--init_defence_prompts", type=int, default="150")
 

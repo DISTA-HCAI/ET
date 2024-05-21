@@ -112,6 +112,7 @@ def eval_performance(model, testenc, batch_size, kwargs):
     seqlen = model.config.max_position_embeddings
     # Calculate number of samples
     nsamples = testenc.numel() // seqlen
+    nsamples = min(nsamples, kwargs['performance_batches'])
     ranger = range
     if kwargs['verbose']:
         print(f"Evaluating perplexity...")
