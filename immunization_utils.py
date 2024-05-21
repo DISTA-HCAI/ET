@@ -15,6 +15,7 @@ from tqdm import trange
 from pprint import pprint
 import wandb
 from datasets import load_dataset
+from my_modeling_llama import LlamaForCausalLM
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -66,7 +67,7 @@ LAYER = 'LAYER'
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = ['IMMUNIZATION', 'REG'] + kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
@@ -381,7 +382,7 @@ def init_reft_defence_config(model, kwargs):
     return defence_config
 
 
-def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
+def init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs):
     """
     We train Low-rank matrices:
     1) Low rank up_proj: (BASIC)
@@ -400,27 +401,33 @@ def init_custom_defence_config(model, attack_config, attacked_model, kwargs):
 
     collect_interventions = []
 
-    for intervention_key, intervention_module in attacked_model.interventions.items():
-        
-        # We assume attacks are made only in the residual_stream, so for each layer, we have 
-        # at most one attack 
-        intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
-        freezed_intervention_module = get_freezed_intervention_module(intervention_module[0])
-        next_transformer_block = get_next_block(
+    # We assume attacks are made only in the residual_stream, so for each layer, we have 
+    # at most one attack # TODO think of mutiple position attacks?
+    intervention_key, intervention_module = list(attacked_model.interventions.items())[0]
+    intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
+    freezed_intervention_module = get_freezed_intervention_module(intervention_module[0])
+
+
+    for defence_idx in range(defences):
+
+        curr_defence_layer = intervention_layer + defence_idx + 1
+    
+        defence_decoder_block = get_decoder_block(
             model, 
-            intervention_layer, 
+            curr_defence_layer, 
             defence_config['low_rank_defence'],
             kwargs)
 
-        defence_config['defences'][intervention_layer] = {
+        defence_config['defences'][curr_defence_layer] = {
             'adversarial_intervention_module' : freezed_intervention_module,
-            'next_transformer_block' : next_transformer_block
+            'defence_decoder_block' : defence_decoder_block
         }
 
         collect_interventions.append({
-            "layer": intervention_layer,
-            "component": 'block_output'
+        "layer": curr_defence_layer,
+        "component": 'block_input'
         })
+
 
     defence_config['intervenable_config'] = pyvene.IntervenableConfig(
         model_type=type(model),
@@ -449,10 +456,12 @@ def get_freezed_intervention_module(intervention_module):
     return intervention_module
 
 
-def get_next_block(model, intervention_layer, low_rank_dimension, kwargs):
+def get_decoder_block(model, layer, low_rank_dimension, kwargs):
 
-    next_block_idx = intervention_layer + 1  # the block to act is the one that receives corrupted interventions
-    originial_next_block = model.model.layers[next_block_idx]
+    """
+    The block to act is a follower of the one that receives corrupted interventions
+    """
+    originial_next_block = model.model.layers[layer]
     custom_next_block = LlamaBlockDefendor(originial_next_block, low_rank_dimension, kwargs)
     return custom_next_block
 
@@ -757,51 +766,70 @@ def defence_training_loop(
                         'attention_mask': batch['attention_mask']},
                     unit_locations={"base" : intervention_locations})
                 
-                ### We assume for now only one-block defence and one-block attacks.  # TODO adjust indexing here for multi-block defences
-                original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
-                # for defence_layer, defence_modules  in defence_config['defences'].items():  # TODO iterate over multiple defences 
-                defence_layer, defence_module = list(defence_config['defences'].items())[0]
-
-                corruption_module = defence_module['adversarial_intervention_module']
-                corrupted_input_reps = corruption_module(original_input_representations)  # these are our "inputs"
-                defensive_block = defence_module['next_transformer_block']
-                original_output_reps = defensive_block(
-                    original_input_representations, 
-                    position_ids=position_ids)[0]  # these are our "labels"
-
-
-            regularizing_output_reps = defensive_block.intervened_forward(
-                original_input_representations,
-                position_ids=position_ids)[0]
-
-            regularization_term = defence_criterion(
-                input=regularizing_output_reps,
-                target=original_output_reps)
-
-            if kwargs['defence_regularization'] == 'compound':
-                reg_optimizer.zero_grad()
-                regularization_term.backward()
-                reg_optimizer.step()
+            ### We assume for now only one-block defence and one-block attacks.  # TODO adjust indexing here for multi-block defences
+            original_input_representations = torch.vstack([output.unsqueeze(0) for output in intervention_outputs[0][1]])     
             
-            epoch_reg_loss += regularization_term.detach()    
-            corrupted_output_reps = defensive_block.intervened_forward(
-                corrupted_input_reps,
-                position_ids=position_ids)[0]
+            reg_loss = 0
+            def_loss = 0
 
-            defensive_loss = defence_criterion(
-                input=corrupted_output_reps,
-                target=original_output_reps)
+            for defence_layer, defence_module in defence_config['defences'].items():  
 
+                with torch.no_grad():
+
+                    corruption_module = defence_module['adversarial_intervention_module']
+                    corrupted_input_reps = corruption_module(original_input_representations)  # these are our "inputs"
+                    defensive_block = defence_module['defence_decoder_block']
+                    original_output_reps = defensive_block(
+                        original_input_representations, 
+                        position_ids=position_ids)[0]  # these are our "labels"
+
+
+                regularizing_output_reps = defensive_block.intervened_forward(
+                    original_input_representations,
+                    position_ids=position_ids)[0]
+
+                regularization_term = defence_criterion(
+                    input=regularizing_output_reps,
+                    target=original_output_reps)
+
+                """
+                # TODO shall we try to reactivate compound regularization?
+                if kwargs['defence_regularization'] == 'compound':
+                    reg_optimizer.zero_grad()
+                    regularization_term.backward()
+                    reg_optimizer.step()
+                """
+
+                reg_loss = reg_loss + regularization_term
+
+                corrupted_output_reps = defensive_block.intervened_forward(
+                    corrupted_input_reps,
+                    position_ids=position_ids)[0]
+
+                defensive_loss = defence_criterion(
+                    input=corrupted_output_reps,
+                    target=original_output_reps)
+                
+                def_loss = def_loss + defensive_loss
+
+            """
             if kwargs['defence_regularization'] == 'simple':
-                main_loss = defensive_loss + regularization_term
+                main_loss = def_loss + reg_loss
             else:
-                main_loss = defensive_loss
+                main_loss = def_loss
+            """
+            # We are working only with simple regularization right now.
+            main_loss = def_loss + reg_loss
 
             defence_optimizer.zero_grad()
             main_loss.backward()
             defence_optimizer.step()
-            epoch_defensive_loss += defensive_loss.detach()        
+
+            epoch_reg_loss += reg_loss.detach()
+            epoch_defensive_loss += def_loss.detach()        
             epoch_loss += main_loss.detach()
+
+
 
         epoch_reg_loss /= batch_idx
         epoch_defensive_loss /= batch_idx
@@ -926,19 +954,24 @@ def custom_defence(
 def get_defence_optimizers(defence_config, kwargs):
     parameters_for_defence_optimizer = []
     parameters_for_regularization_optimizer = []
+
+    # We are not supporting compound regularization anymore... #TODO try reactivating it...
+    assert kwargs['defence_regularization'] == 'simple'
+
     if kwargs['defence_regularization'] == 'simple':
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
-            defence_block = defence_modules_dict['next_transformer_block']
+            defence_block = defence_modules_dict['defence_decoder_block']
             # all loras are used for defence + reg. (could lead to gradient conflict)
             parameters_for_defence_optimizer.extend([param for param in defence_block.parameters() if param.requires_grad])
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate'])]
+    
     else:
         assert kwargs['defence_regularization'] == 'compound' and \
             'GATE' in kwargs['defence_strategy'] and \
             'UP' in kwargs['defence_strategy'] and \
             'DOWN' in kwargs['defence_strategy']
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
-            defence_block = defence_modules_dict['next_transformer_block']
+            defence_block = defence_modules_dict['defence_decoder_block']
             # gate and up projections are used for defence:
             for named_param in defence_block.named_parameters():
                 if named_param[0] in ['gate_A.weight', 'gate_B.weight', 'up_A.weight', 'up_B.weight']:\
@@ -966,34 +999,34 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                                          'DOWN': {}}
 
     for defence_layer, defence_module in defence_config['defences'].items():
-        if kwargs['verbose']: print(f'Absorbing defence LoRA in decoder layer {defence_layer+1}...')
-        defensive_block = defence_module['next_transformer_block']
+        # if kwargs['verbose']: print(f'Absorbing defence LoRA in decoder layer {defence_layer+1}...')
+        defensive_block = defence_module['defence_decoder_block']
 
         if 'GATE' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['GATE'][defence_layer+1] = model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone()
+            kwargs['cached_original_modules']['GATE'][defence_layer] = model.model.layers[defence_layer].mlp.gate_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.mlp.gate_B.weight, 
                 defensive_block.mlp.gate_A.weight)
-            model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(
-                model.model.layers[defence_layer+1].mlp.gate_proj.weight.clone() + 
+            model.model.layers[defence_layer].mlp.gate_proj.weight = torch.nn.Parameter(
+                model.model.layers[defence_layer].mlp.gate_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'UP' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['UP'][defence_layer+1] = model.model.layers[defence_layer+1].mlp.up_proj.weight.clone()
+            kwargs['cached_original_modules']['UP'][defence_layer] = model.model.layers[defence_layer].mlp.up_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.mlp.up_B.weight, 
                 defensive_block.mlp.up_A.weight)
-            model.model.layers[defence_layer+1].mlp.up_proj.weight = torch.nn.Parameter(
-                model.model.layers[defence_layer+1].mlp.up_proj.weight.clone() + 
+            model.model.layers[defence_layer].mlp.up_proj.weight = torch.nn.Parameter(
+                model.model.layers[defence_layer].mlp.up_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'DOWN' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['DOWN'][defence_layer+1] = model.model.layers[defence_layer+1].mlp.down_proj.weight.clone()
+            kwargs['cached_original_modules']['DOWN'][defence_layer] = model.model.layers[defence_layer].mlp.down_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.mlp.down_B.weight, 
                 defensive_block.mlp.down_A.weight)
-            model.model.layers[defence_layer+1].mlp.down_proj.weight = torch.nn.Parameter(
-                model.model.layers[defence_layer+1].mlp.down_proj.weight.clone() + 
+            model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(
+                model.model.layers[defence_layer].mlp.down_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
     return model
@@ -1002,13 +1035,13 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 def reset_defended_module(model, defence_config, kwargs):
     
     for defence_layer, defence_module in defence_config['defences'].items():
-        if kwargs['verbose']: print(f'Resetting defence LoRA defences in layer {defence_layer+1}...')
+        # if kwargs['verbose']: print(f'Resetting defence LoRA defences in layer {defence_layer+1}...')
         if 'GATE' in kwargs['defence_strategy']:
-            model.model.layers[defence_layer+1].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['GATE'][defence_layer+1])
+            model.model.layers[defence_layer].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['GATE'][defence_layer])
         if 'UP' in kwargs['defence_strategy']:
-            model.model.layers[defence_layer+1].mlp.up_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['UP'][defence_layer+1])
+            model.model.layers[defence_layer].mlp.up_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['UP'][defence_layer])
         if 'DOWN' in kwargs['defence_strategy']:
-            model.model.layers[defence_layer+1].mlp.down_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['DOWN'][defence_layer+1])
+            model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['DOWN'][defence_layer])
 
     return model
 
@@ -1027,7 +1060,8 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
 
 
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
-    defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
+    defences = len(prev_defence_config['defences'])
+    defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences+1, kwargs)
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 50 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']

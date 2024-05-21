@@ -100,8 +100,9 @@ def main(args):
                 # If we did make a good attack, implement a defence.
                 if kwargs['verbose']: print('Defensive phase...\n')
                 outer_defence_rounds += 1
-                defence_config = init_custom_defence_config(model, attack_config, attacked_model, kwargs)
-                for inner_defence_round in range(args.max_defence_rounds):
+                defence_config = init_custom_defence_config(model, attack_config, attacked_model, 1, kwargs)
+                max_defence_rounds = model.config.num_hidden_layers - 1 - layer
+                for inner_defence_round in range(max_defence_rounds):
                     kwargs['timestep'] += 1
                     safety_eval_table = custom_defence(
                         model,
@@ -121,12 +122,12 @@ def main(args):
                         break  # end defence round
                     else:  # defence failed, try a new defence configuration
                         if kwargs['verbose']: print('Defence failed! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'])
-                        if inner_defence_round < args.max_defence_rounds - 1:
+                        if inner_defence_round < max_defence_rounds - 1:
                             if kwargs['verbose']: print(' Evolving defence... \n')
                             defence_config = evolve_defence_config(model, attack_config, attacked_model, defence_config, kwargs)
 
                 
-                if inner_defence_round == args.max_defence_rounds - 1:  # Did we fail to defent against this attack given a defence budget?
+                if inner_defence_round == max_defence_rounds - 1:  # Did we fail to defent against this attack given a defence budget?
                     print(f'Failed to find a defence for last attack at layer {layer}')
                     # pprint_attack_config(attack_config)
                     log_immunization(
@@ -166,7 +167,6 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default="/home/jovyan/.cache/huggingface/hub")
     parser.add_argument("--max_immunization_rounds", type=int, default=5)  # prevents the eternal war...
     parser.add_argument("--max_attack_rounds", type=int, default=3)
-    parser.add_argument("--max_defence_rounds", type=int, default=3)  
     parser.add_argument("--min_toxicity_increase_factor", type=float, default=2)  
     parser.add_argument("--min_safety_percentage", type=float, default=0.8)  # immunization means keeping at least x percent of initial safety.
     parser.add_argument("--min_performance", type=float, default=0.10)  # Adjust according to model's initial values 
