@@ -390,11 +390,17 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
             'defence_decoder_block' : defence_decoder_block
         }
 
-        collect_interventions.append({
-        "layer": curr_defence_layer,
-        "component": 'block_input'
-        })
-
+        if defence_idx == 0:
+            collect_interventions.append({
+            "layer": curr_defence_layer,
+            "component": 'block_input'
+            })
+        
+        if defence_idx == defences - 1:
+            collect_interventions.append({
+            "layer": curr_defence_layer,
+            "component": 'block_output'
+            })
 
     defence_config['intervenable_config'] = pyvene.IntervenableConfig(
         model_type=type(model),
@@ -406,7 +412,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
     defence_config['dataset_size'] = kwargs['init_defence_prompts']
     defence_config['epochs'] =  kwargs['init_defence_epochs']
     defence_config['batch_size'] = kwargs['init_defence_batch_size']
-    defence_config['intervention_count'] = len(defence_config['defences'])
+    defence_config['intervention_count'] = 2
     defence_config['defence_criterion'] = kwargs['init_defence_criterion']
     defence_config['absortion_scaling'] = kwargs['init_defence_absortion_scaling']
     defence_config['safety'] = 0
@@ -813,102 +819,76 @@ def defence_training_loop(
 
         for batch_idx, batch in enumerate(defence_dataloader):
             
+            intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
+            position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
+            batch.to(kwargs['device'])
+
             with torch.no_grad():
 
-                intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
-                position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
-
-                batch.to(kwargs['device'])
                 intervention_outputs = intervenable_model(
                     base={'input_ids' : batch['input_ids'],
                           'attention_mask': batch['attention_mask']},
                     unit_locations={"base" : intervention_locations})
-            
-                original_input_representations = []
-                for input_representation_list in split_list(
-                        intervention_outputs[0][1], 
-                        defence_config['batch_size']):
-                    
-                    original_input_representations.append(
-                        torch.vstack(
-                            [input_representation.unsqueeze(0) for input_representation in input_representation_list]
-                        )
-                    )
-                
+                            
                 causal_mask = get_layer_causal_mask(
                     intervenable_model.model, 
                     batch['input_ids'], 
                     position_ids, 
                     batch['attention_mask'])
 
-            reg_loss = 0
-            def_loss = 0
+                # original_input_reps are the "inputs" of the stability training
+                original_input_representations = torch.vstack(
+                    [intervention_output.unsqueeze(0) for intervention_output in intervention_outputs[0][1][:defence_config['batch_size']]])
+                # corrupted_input_reps are the "inputs" of the neutalization training:
+                corrupted_input_represetations = corruption_module(original_input_representations)
+                # original_output_reps are the "targets" of both stability and neutralization training:
+                original_output_representations = torch.vstack(
+                    [intervention_output.unsqueeze(0) for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
+                
+            # WITH GRAD
+
+            # regularizing_output_reps will be the "preds" of the stability training
+            regularizing_output_representations = original_input_representations
+            # neutralizing output_reps will be the "preds" of the neutralization training
+            neutralizing_output_representations = corrupted_input_represetations
 
             defence_tuples = list(defence_config['defences'].items())
-
             for defence_idx in range(len(defence_tuples)):
-
                 defence_layer, defence_module = defence_tuples[defence_idx]
                 defensive_block = defence_module['defence_decoder_block']
 
-                with torch.no_grad():
-                    
-                    # corrupted_input_reps are the "inputs" of the training:
-                    if defence_idx == 0:
-                        corrupted_input_reps = corruption_module(original_input_representations[defence_idx])
-                    else:
-                        prev_defensive_block = defence_tuples[defence_idx-1][1]['defence_decoder_block']
-                        corrupted_input_reps = prev_defensive_block(
-                            corrupted_input_reps,
-                            attention_mask=causal_mask,
-                            position_ids=position_ids)[0]
-
-                    # original_output_reps are the "targets" of the training:
-                    original_output_reps = defensive_block(
-                        original_input_representations[defence_idx],
-                        attention_mask=causal_mask, 
-                        position_ids=position_ids)[0]  # these are our "labels"
-
-                # stability:
-                regularizing_output_reps = defensive_block.intervened_forward(
-                    original_input_representations[defence_idx],
+                regularizing_output_representations = defensive_block.intervened_forward(
+                    regularizing_output_representations,
                     attention_mask=causal_mask,
                     position_ids=position_ids)[0]
 
-                regularization_term = defence_criterion(
-                    input=regularizing_output_reps,
-                    target=original_output_reps)
+            reg_loss = defence_criterion(
+                input=regularizing_output_representations,
+                target=original_output_representations)
 
-                """
-                # TODO shall we try to reactivate compound regularization?
-                if kwargs['defence_regularization'] == 'compound':
-                    reg_optimizer.zero_grad()
-                    regularization_term.backward()
-                    reg_optimizer.step()
-                """
+            if kwargs['defence_regularization'] == 'compound':
+                reg_optimizer.zero_grad()
+                reg_loss.backward()
+                reg_optimizer.step()
+            
+            for defence_idx in range(len(defence_tuples)):
+                defence_layer, defence_module = defence_tuples[defence_idx]
+                defensive_block = defence_module['defence_decoder_block']
 
-                reg_loss = reg_loss + regularization_term
-
-                # neutralization:
-                predicted_activations = defensive_block.intervened_forward(
-                    corrupted_input_reps,
+                neutralizing_output_representations = defensive_block.intervened_forward(
+                    neutralizing_output_representations,
+                    attention_mask=causal_mask,
                     position_ids=position_ids)[0]
 
-                defensive_loss = defence_criterion(
-                    input=predicted_activations,
-                    target=original_output_reps)
-                
-                def_loss = def_loss + defensive_loss
-
-            """
+            def_loss = defence_criterion(
+                input=neutralizing_output_representations,
+                target=original_output_representations)
+            
             if kwargs['defence_regularization'] == 'simple':
                 main_loss = def_loss + reg_loss
             else:
                 main_loss = def_loss
-            """
-            # We are working only with simple regularization right now.
-            main_loss = def_loss + reg_loss
-
+            
             defence_optimizer.zero_grad()
             main_loss.backward()
             defence_optimizer.step()
@@ -927,8 +907,9 @@ def defence_training_loop(
         if kwargs['verbose'] and not kwargs['tqdm']: 
             print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
             print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
-            print(f'defence epoch {epoch} mean loss {mean_epoch_loss}')
+            print(f'defence epoch {epoch} mean loss {epoch_loss}')
         """
+
         mean_defensive_loss += epoch_defensive_loss.item()
         mean_reg_loss += epoch_reg_loss.item()
         mean_loss += epoch_loss.item()
@@ -1043,9 +1024,6 @@ def get_defence_optimizers(defence_config, kwargs):
     parameters_for_defence_optimizer = []
     parameters_for_regularization_optimizer = []
 
-    # We are not supporting compound regularization anymore... #TODO try reactivating it...
-    assert kwargs['defence_regularization'] == 'simple'
-
     if kwargs['defence_regularization'] == 'simple':
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_block = defence_modules_dict['defence_decoder_block']
@@ -1062,9 +1040,9 @@ def get_defence_optimizers(defence_config, kwargs):
             defence_block = defence_modules_dict['defence_decoder_block']
             # gate and up projections are used for defence:
             for named_param in defence_block.named_parameters():
-                if named_param[0] in ['gate_A.weight', 'gate_B.weight', 'up_A.weight', 'up_B.weight']:\
+                if named_param[0] in ['mlp.gate_A.weight', 'mlp.gate_B.weight', 'mlp.up_A.weight', 'mlp.up_B.weight']:\
                     parameters_for_defence_optimizer.append(named_param[1])
-                elif named_param[0] in ['down_A.weight', 'down_B.weight']:
+                elif named_param[0] in ['mlp.down_A.weight', 'mlp.down_B.weight']:
                     parameters_for_regularization_optimizer.append(named_param[1])
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']),
                 torch.optim.Adam(parameters_for_regularization_optimizer, lr=kwargs['learning_rate'])]
