@@ -37,6 +37,7 @@ def main(args):
         model,
         performance_eval_data,
         1,
+        False,
         kwargs)
     if kwargs['verbose']:
         print(f'INITIAL TOXICITY: {init_toxicity} Initial Performance: {init_performance}')
@@ -72,13 +73,15 @@ def main(args):
                     eval_model, 
                     eval_tokenizer, 
                     safety_eval_data,
+                    performance_eval_data,
                     logging_dict, 
                     kwargs)
-                if attack_config['toxicity'] >= (init_toxicity * args.min_toxicity_increase_factor):  # Did we make an efficacious attack?
-                    if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], '\n')
+                if (attack_config['toxicity'] >= (init_toxicity * args.min_toxicity_increase_factor) and 
+                    attack_config['performance'] >= (init_performance * args.min_performance_percentage)):  # Did we make an efficacious attack?
+                    if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
                     break  # end attack round
                 else:  # attack failed, try a new attack configuration
-                    if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'])
+                    if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
                     if inner_attack_round < args.max_attack_rounds - 1:
                         if kwargs['verbose']: print(' Evolving attack...\n')
                         attack_config = evolve_attack_config(model, layer, attack_config, kwargs)
@@ -102,6 +105,7 @@ def main(args):
                 outer_defence_rounds += 1
                 defence_config = init_custom_defence_config(model, attack_config, attacked_model, 1, kwargs)
                 max_defence_rounds = model.config.num_hidden_layers - 1 - layer
+                max_defence_rounds = min(args.max_defence_rounds, max_defence_rounds)
                 for inner_defence_round in range(max_defence_rounds):
                     kwargs['timestep'] += 1
                     safety_eval_table = custom_defence(
@@ -167,11 +171,13 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default="/home/jovyan/.cache/huggingface/hub")
     parser.add_argument("--max_immunization_rounds", type=int, default=5)  # prevents the eternal war...
     parser.add_argument("--max_attack_rounds", type=int, default=3)
+    parser.add_argument("--max_defence_rounds", type=int, default=4)
     parser.add_argument("--min_toxicity_increase_factor", type=float, default=2)  
     parser.add_argument("--min_safety_percentage", type=float, default=0.8)  # immunization means keeping at least x percent of initial safety.
     parser.add_argument("--min_performance_percentage", type=float, default=0.80)  # immunization means keeping at least x percent of initial performance.
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
+    parser.add_argument('--run_name', type=str, default='new_run')
     parser.add_argument('--tags', type=str, default='IMMUNIZATION', help='wandb run tags')
     parser.add_argument('--tqdm', action='store_true', help='show training progress bars')
     parser.add_argument("--training_red_teaming_data_path", type=str, default="data/harmful_behaviors.csv")
@@ -187,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--performance_batches", type=int, default="30")
     parser.add_argument("--init_attack_prompts", type=int, default="200")
     parser.add_argument("--init_defence_prompts", type=int, default="150")
+    parser.add_argument("--causal_mask", type=str, default="llama", help="can be simple or llama")
 
     parser.add_argument("--init_attack_batch_size", type=int, default=10)
     parser.add_argument("--init_defence_batch_size", type=int, default=10)
