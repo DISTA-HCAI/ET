@@ -18,7 +18,7 @@ from datasets import load_dataset
 from my_modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
+from transformers.models.llama import modeling_llama
 from pyreft.interventions import (
         NoreftIntervention,
         NoreftInterventionNoBias,
@@ -27,13 +27,6 @@ from pyreft.interventions import (
         LobireftIntervention,
         NodireftIntervention)
 
-import peft
-from peft import (  
-    LoraConfig, 
-    LoftQConfig, 
-    LoHaConfig, 
-    LoftQConfig)
-
 INTERVENTIONS = [
     NoreftIntervention,
     NoreftInterventionNoBias,
@@ -41,11 +34,6 @@ INTERVENTIONS = [
     LoreftInterventionNoBias,
     LobireftIntervention,
     NodireftIntervention]
-
-LORAS = [LoraConfig, 
-        LoftQConfig, 
-        LoHaConfig, 
-        LoftQConfig]
 
 IGNORE_INDEX = -100
 CHAT_TEMPLATE = """<s>[INST] %s [/INST]"""
@@ -74,7 +62,7 @@ def init_wandb_stuff(kwargs):
                 project='low_cost_toxification',
                 config=kwargs,
                 mode=("online" if kwargs['logging'] else "disabled"),
-                # name= TODO craft a name
+                name= kwargs['run_name'],
                 tags=wandb_tags)
 
         print("Starting immunization process...\n\n")
@@ -106,13 +94,16 @@ def get_performance_eval_dataset(tokenizer, kwargs):
     return encoded_test_data
 
 
-def eval_performance(model, testenc, batch_size, kwargs):
+def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
     """
     This function was copied and edited from https://github.com/boyiwei/alignment-attribution-code
     """
     # Get input IDs
     testenc = testenc.input_ids
-    seqlen = model.config.max_position_embeddings
+    if isReftModel:
+        seqlen = model.model.config.max_position_embeddings
+    else:
+        seqlen = model.config.max_position_embeddings
     # Calculate number of samples
     nsamples = testenc.numel() // seqlen
     nsamples = min(nsamples, kwargs['performance_batches'])
@@ -138,8 +129,22 @@ def eval_performance(model, testenc, batch_size, kwargs):
             inputs = testenc[:, (i * seqlen) : (j * seqlen)].to(kwargs['device'])
             inputs = inputs.reshape(j - i, seqlen)
 
-            # Forward pass through the model
-            lm_logits = model(inputs).logits
+            if isReftModel:
+                unit_locations={
+                "sources->base": (
+                    None, 
+                    [[list(range(seqlen))]]*len(model.interventions)
+                                )}
+
+                intervention_outputs = model(
+                    base={'input_ids' : inputs},
+                    unit_locations=unit_locations
+                )
+                lm_logits = intervention_outputs[1].logits
+            else:
+
+                # Forward pass through the model
+                lm_logits = model(inputs).logits
 
             # Shift logits and labels for next token prediction
             shift_logits = lm_logits[:, :-1, :].contiguous()
@@ -502,6 +507,7 @@ def reft_attack(
         eval_model,
         eval_tokenizer, 
         safety_eval_data,
+        performance_eval_data,
         logging_dict,
         kwargs):
     report_attack_config(attack_config, logging_dict, kwargs)
@@ -557,6 +563,14 @@ def reft_attack(
         True,
         'attack',
         kwargs)
+
+    attack_config['performance'] = 1/ eval_performance(
+        reft_model,
+        performance_eval_data,
+        1,
+        True,
+        kwargs
+    )
 
     logging_dict['wandb_run'].log(
         { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
@@ -790,6 +804,16 @@ def get_layer_causal_mask(model, input_ids, cache_position, attention_mask):
         DynamicCache.from_legacy_cache(None), 
         False)
 
+def generate_causal_mask(input_tensor, kwargs):
+
+    dtype = torch.bfloat16
+    device = kwargs['device']
+    min_dtype = torch.finfo(dtype).min
+    seq_len = input_tensor.shape[1]
+    mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, min_dtype).masked_fill(mask == 1, float(0.0))
+    mask = mask.unsqueeze(0).unsqueeze(0)
+    return mask.repeat(input_tensor.shape[0],1,1,1).to(dtype).to(kwargs['device'])
 
 def defence_training_loop(
     defence_config, 
@@ -829,12 +853,16 @@ def defence_training_loop(
                     base={'input_ids' : batch['input_ids'],
                           'attention_mask': batch['attention_mask']},
                     unit_locations={"base" : intervention_locations})
-                            
-                causal_mask = get_layer_causal_mask(
-                    intervenable_model.model, 
-                    batch['input_ids'], 
-                    position_ids, 
-                    batch['attention_mask'])
+
+                if kwargs['causal_mask'] == 'llama':
+                    causal_mask = get_layer_causal_mask(
+                        intervenable_model.model, 
+                        batch['input_ids'], 
+                        position_ids, 
+                        batch['attention_mask'])
+                
+                else:          
+                    causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
 
                 # original_input_reps are the "inputs" of the stability training
                 original_input_representations = torch.vstack(
@@ -862,33 +890,21 @@ def defence_training_loop(
                     attention_mask=causal_mask,
                     position_ids=position_ids)[0]
 
-            reg_loss = defence_criterion(
-                input=regularizing_output_representations,
-                target=original_output_representations)
-
-            if kwargs['defence_regularization'] == 'compound':
-                reg_optimizer.zero_grad()
-                reg_loss.backward()
-                reg_optimizer.step()
-            
-            for defence_idx in range(len(defence_tuples)):
-                defence_layer, defence_module = defence_tuples[defence_idx]
-                defensive_block = defence_module['defence_decoder_block']
-
                 neutralizing_output_representations = defensive_block.intervened_forward(
                     neutralizing_output_representations,
                     attention_mask=causal_mask,
                     position_ids=position_ids)[0]
 
-            def_loss = defence_criterion(
-                input=neutralizing_output_representations,
-                target=original_output_representations)
+                reg_loss = defence_criterion(
+                    input=regularizing_output_representations,
+                    target=original_output_representations)
+
+                def_loss = defence_criterion(
+                    input=neutralizing_output_representations,
+                    target=original_output_representations.clone())
             
-            if kwargs['defence_regularization'] == 'simple':
                 main_loss = def_loss + reg_loss
-            else:
-                main_loss = def_loss
-            
+
             defence_optimizer.zero_grad()
             main_loss.backward()
             defence_optimizer.step()
@@ -1002,6 +1018,7 @@ def custom_defence(
         model,
         performance_eval_data,
         1,
+        False,
         kwargs)
 
     model = reset_defended_module(model, defence_config, kwargs)
