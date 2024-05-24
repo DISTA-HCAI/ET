@@ -50,6 +50,7 @@ DEFENCE_DEF_LOSS = 'DEFENCE_MAIN_LOSS'
 TOXICITY_AFTER_DEFENCE = 'TOXICITY_AFTER_DEFENCE'
 SAFETY_AFTER_DEFENCE = 'SAFETY_AFTER_DEFENCE'
 PERFORMANCE_AFTER_DEFENCE = 'PERFORMANCE_AFTER_DEFENCE'
+PERFORMANCE_AFTER_ATTACK = 'PERFORMANCE_AFTER_ATTACK'
 INITIAL_TOXICITY = 'INITIAL_TOXICITY'
 INTIIAL_PERFORMANCE = 'INITIAL_PERFORMANCE'
 STEP_LABEL = 'STEP'
@@ -57,7 +58,7 @@ LAYER = 'LAYER'
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'MULTIBLOCK', 'CAUSAL_MASK'] + kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'CAUSAL_MASK'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
@@ -75,10 +76,20 @@ def init_wandb_stuff(kwargs):
             "max_toxicity",
             "current_safety",
             "current_performance"])
+        step_report = []
+        step_table = wandb.Table(columns=[
+            "layer", 
+            "action",
+            "toxicity",
+            "performance",
+            "step"])
+
 
         return {'wandb_run': run,
                 'immunization_report' : immunization_report,
-                'immunization_table': immunization_table}
+                'step_report': step_report,
+                'immunization_table': immunization_table,
+                'step_table': step_table}
 
 
 def get_performance_eval_dataset(tokenizer, kwargs):
@@ -190,6 +201,25 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         attack_config['toxicity'],
         (defence_config['safety'] if defence_config else 0),
         (defence_config['performance'] if defence_config else 0))
+
+
+def log_step(layer, action, toxicity, performance, step, logging_dict):
+
+    record =  {
+        'layer':layer, 
+        'action': action, 
+        'toxicity': toxicity, 
+        'performance': performance,
+        'step': step,
+        }
+
+    logging_dict['step_report'].append(record)
+    logging_dict['step_table'].add_data(
+        layer,
+        action,
+        toxicity,
+        performance,
+        step)
 
 
 def load_model(kwargs):
@@ -574,6 +604,10 @@ def reft_attack(
 
     logging_dict['wandb_run'].log(
         { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
+         STEP_LABEL: kwargs['timestep'] })
+
+    logging_dict['wandb_run'].log(
+        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'],
          STEP_LABEL: kwargs['timestep'] })
 
     return reft_model, eval_table
@@ -1137,21 +1171,17 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
     attack_config['dataset_size'] = prev_attack_config['dataset_size'] + 50 
     if attack_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         attack_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
-        if attack_config['epochs'] < 20:
-            attack_config['epochs'] += 2
+    attack_config['epochs'] += 5
     return attack_config
 
 
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
     defences = len(prev_defence_config['defences'])
-    defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences+1, kwargs)
+    defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs)
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 50 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
-        if defence_config['epochs'] < 20:
-            defence_config['epochs'] += 2
-    if defence_config['regularization_coefficient'] < 2:
-        defence_config['regularization_coefficient'] += 0.3
+    defence_config['epochs'] += 5
     return defence_config
 
 
@@ -1164,3 +1194,6 @@ def final_report(logging_dict):
         print('IMMUNIZATION REPORT:\n\n')
         pprint(logging_dict['immunization_report'])
         logging_dict['wandb_run'].log({'IMMUNIZATION REPORT':logging_dict['immunization_table']})
+        print('STEP REPORT:\n\n')
+        pprint(logging_dict['step_report'])
+        logging_dict['wandb_run'].log({'STEP REPORT':logging_dict['step_table']})
