@@ -4,3 +4,4 @@ data
 local_checkpoints
 wandb
 __pycache__
+install_requisites.sh
