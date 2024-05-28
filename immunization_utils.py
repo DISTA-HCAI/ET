@@ -248,9 +248,9 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
                 'immunized': immunized, 
                 'attack_rounds': attack_rounds, 
                 'defence_rounds': defence_rounds,
-                'max_toxicity': attack_config['toxicity'],
-                'current_safety': (defence_config['safety'] if defence_config else 0),
-                'current_performance': (defence_config['performance'] if defence_config else 0)}
+                'max_toxicity': attack_config['toxicity'] / kwargs['init_toxicity'],
+                'current_safety': (defence_config['safety'] / kwargs['init_tosafety'] if defence_config else 0),
+                'current_performance': (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
     logging_dict['immunization_table'].add_data(
@@ -258,9 +258,9 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         immunized,
         attack_rounds,
         defence_rounds,
-        attack_config['toxicity'],
-        (defence_config['safety'] if defence_config else 0),
-        (defence_config['performance'] if defence_config else 0))
+        attack_config['toxicity'] / kwargs['init_toxicity'],
+        (defence_config['safety'] / kwargs['init_tosafety'] if defence_config else 0),
+        (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0))
 
     logging_dict['wandb_run'].log(
         { ('S' if immunized else 'Uns') + 'uccesfully immunized layers': layer,
@@ -273,8 +273,8 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': toxicity, 
-        'performance': performance,
+        'toxicity': toxicity / kwargs['init_toxicity'], 
+        'performance': performance / kwargs['init_performance'],
         'step': kwargs['timestep'],
         }
 
@@ -282,8 +282,8 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
     logging_dict['step_table'].add_data(
         layer,
         action,
-        toxicity,
-        performance,
+        toxicity / kwargs['init_toxicity'],
+        performance / kwargs['init_performance'],
         kwargs['timestep'])
 
     logging_dict['wandb_run'].log(
