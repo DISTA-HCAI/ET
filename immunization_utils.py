@@ -11,7 +11,7 @@ import pandas as pd
 import copy
 import datasets
 from CustomLlamaMLP import *
-from tqdm import trange 
+from tqdm import tqdm, trange 
 from pprint import pprint
 import wandb
 from datasets import load_dataset
@@ -55,6 +55,66 @@ INITIAL_TOXICITY = 'INITIAL_TOXICITY'
 INTIIAL_PERFORMANCE = 'INITIAL_PERFORMANCE'
 STEP_LABEL = 'STEP'
 LAYER = 'LAYER'
+
+torch.manual_seed(77)
+
+
+def initialize(args):
+    
+    kwargs = vars(args)
+    model, tokenizer = load_model(kwargs)
+    eval_model, eval_tokenizer = load_eval_model(kwargs)
+    training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
+    safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)
+    performance_eval_data = get_performance_eval_dataset(tokenizer, kwargs)
+    logging_dict = init_wandb_stuff(kwargs)
+
+    kwargs['current_layer'] = \
+        kwargs['current_outer_attack_round'] = \
+        kwargs['current_inner_attack_round'] = \
+        kwargs['current_outer_defence_round'] = \
+        kwargs['current_inner_defence_round'] = 'init' 
+    kwargs['timestep'] = 0
+    init_toxicity, _ = eval_safety(
+        model, 
+        tokenizer,
+        eval_model,
+        eval_tokenizer,
+        safety_eval_data,
+        args.init_eval_performance_prompts,
+        logging_dict,
+        False,
+        'init',
+        kwargs)
+    init_safety = 1 - init_toxicity
+    init_performance = 1/eval_performance(
+        model,
+        performance_eval_data,
+        1,
+        False,
+        kwargs)
+    kwargs['init_toxicity'] = init_toxicity
+    kwargs['init_safety'] = init_safety
+    kwargs['init_performance'] = init_performance
+
+    if kwargs['verbose']:
+        print(f'INITIAL TOXICITY: {init_toxicity} Initial Performance: {init_performance}')
+    logging_dict['wandb_run'].log({'INITIAL_TOXICITY': init_toxicity, 'STEP': kwargs['timestep']})
+    logging_dict['wandb_run'].log({'INITIAL_PERFORMANCE': init_performance, 'STEP': kwargs['timestep']})
+    if kwargs['verbose'] and not kwargs['logging']: 
+        print("IMMUNIZATION PARAMS:")
+        pprint(kwargs)
+        print("\n")
+
+
+    return kwargs, \
+        logging_dict, \
+        model, tokenizer, \
+        eval_model, eval_tokenizer, \
+        training_attack_data_dict, \
+        safety_eval_data, \
+        performance_eval_data
+
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
@@ -120,7 +180,7 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
     nsamples = min(nsamples, kwargs['performance_batches'])
     ranger = range
     if kwargs['verbose']:
-        # print(f"Evaluating perplexity...")
+        print(f"Evaluating perplexity...")
         if kwargs['tqdm']: ranger = trange
 
     # List to store negative log likelihoods
@@ -182,15 +242,15 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
     return ppl.item()
 
 
-def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict):
+def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict, kwargs):
 
     record =  {'layer':layer, 
-                    'immunized': immunized, 
-                    'attack_rounds': attack_rounds, 
-                    'defence_rounds': defence_rounds,
-                    'max_toxicity': attack_config['toxicity'],
-                    'current_safety': (defence_config['safety'] if defence_config else 0),
-                    'current_performance': (defence_config['performance'] if defence_config else 0)}
+                'immunized': immunized, 
+                'attack_rounds': attack_rounds, 
+                'defence_rounds': defence_rounds,
+                'max_toxicity': attack_config['toxicity'],
+                'current_safety': (defence_config['safety'] if defence_config else 0),
+                'current_performance': (defence_config['performance'] if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
     logging_dict['immunization_table'].add_data(
@@ -202,15 +262,20 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         (defence_config['safety'] if defence_config else 0),
         (defence_config['performance'] if defence_config else 0))
 
+    logging_dict['wandb_run'].log(
+        { ('S' if immunized else 'Uns') + 'uccesfully immunized layers': layer,
+         STEP_LABEL: kwargs['timestep'] })
 
-def log_step(layer, action, toxicity, performance, step, logging_dict):
+
+
+def log_successful_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
     record =  {
         'layer':layer, 
         'action': action, 
         'toxicity': toxicity, 
         'performance': performance,
-        'step': step,
+        'step': kwargs['timestep'],
         }
 
     logging_dict['step_report'].append(record)
@@ -219,7 +284,15 @@ def log_step(layer, action, toxicity, performance, step, logging_dict):
         action,
         toxicity,
         performance,
-        step)
+        kwargs['timestep'])
+
+    logging_dict['wandb_run'].log(
+        { 'Toxicity after succesful ' + action + 's' : toxicity / kwargs['init_toxicity'],
+         STEP_LABEL: kwargs['timestep'] })
+
+    logging_dict['wandb_run'].log(
+        { 'Performance after succesful ' + action + 's' : performance / kwargs['init_performance'],
+         STEP_LABEL: kwargs['timestep'] })
 
 
 def load_model(kwargs):
@@ -540,6 +613,7 @@ def reft_attack(
         performance_eval_data,
         logging_dict,
         kwargs):
+    if kwargs['verbose']: print('Performing Adversary Training...')
     report_attack_config(attack_config, logging_dict, kwargs)
     reft_model = pyreft.get_reft_model(model, attack_config['reft_config'])
     reft_model.set_device(kwargs['device'])
@@ -603,11 +677,11 @@ def reft_attack(
     )
 
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
+        { TOXICITY_AFTER_ATTACK: attack_config['toxicity'] / kwargs['init_toxicity'],
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'],
+        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'] / kwargs['init_performance'],
          STEP_LABEL: kwargs['timestep'] })
 
     return reft_model, eval_table
@@ -625,14 +699,22 @@ def eval_safety(
         mode,
         kwargs):
 
+    if kwargs['verbose']: print('Evaluating safety...')
+
+    safety_eval_iterator = zip(
+                safety_eval_data['red_team_prompts_no_template'][:eval_prompts], 
+                safety_eval_data['all_base_input_ids'][:eval_prompts])
+
+    if kwargs['tqdm']: 
+        safety_eval_iterator = tqdm(safety_eval_iterator, total=eval_prompts)
+
     with torch.no_grad():
 
         flag = 0
         eval_step = 0
         eval_table = wandb.Table(columns=['prompt', 'response', 'moderation'])
-        for eval_prompt, tokenized_eval_prompt in zip(
-                safety_eval_data['red_team_prompts_no_template'][:eval_prompts], 
-                safety_eval_data['all_base_input_ids'][:eval_prompts]):
+
+        for eval_prompt, tokenized_eval_prompt in safety_eval_iterator:
             
             # if kwargs['verbose']: print('request: ',eval_prompt)
             output = deterministic_query(
@@ -856,7 +938,8 @@ def defence_training_loop(
     defence_criterion, 
     defence_optimizers, 
     kwargs):
-
+    
+    if kwargs['verbose']: print('Training defence...')
     mean_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
@@ -977,6 +1060,11 @@ def defence_training_loop(
     return defence_results  
 
 
+def get_max_defence_rounds(model, current_layer, kwargs):
+    max_defence_rounds = model.config.num_hidden_layers - 1 - current_layer
+    return min(kwargs['max_defence_rounds'], max_defence_rounds)
+
+                    
 def report_attack_config(attack_config, logging_dict, kwargs):
     logging_dict['wandb_run'].log(
         { 'ATTACK_EPOCHS': attack_config['epochs'],
@@ -1034,7 +1122,7 @@ def custom_defence(
         { DEFENCE_LOSS: defence_results['mean_loss'],
          STEP_LABEL: kwargs['timestep'] })
 
-    model = absorb_defender_adaptor(model, defence_config, kwargs)
+    model = absorb_defender_adaptor(model, defence_config, False, None, kwargs)
 
     toxicity_score, eval_table = eval_safety(
         model,
@@ -1058,14 +1146,14 @@ def custom_defence(
     model = reset_defended_module(model, defence_config, kwargs)
 
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_DEFENCE: toxicity_score,
+        { TOXICITY_AFTER_DEFENCE: toxicity_score / kwargs['init_toxicity'],
          STEP_LABEL: kwargs['timestep'] })
     defence_config['safety'] = 1 - toxicity_score
     logging_dict['wandb_run'].log(
-        { SAFETY_AFTER_DEFENCE: defence_config['safety'],
+        { SAFETY_AFTER_DEFENCE: defence_config['safety'] / kwargs['init_safety'],
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'],
+        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'] / kwargs['init_performance'],
          STEP_LABEL: kwargs['timestep'] })
 
     return eval_table
@@ -1109,7 +1197,7 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
         )
 
 
-def absorb_defender_adaptor(model, defence_config, kwargs):
+def absorb_defender_adaptor(model, defence_config, permanent, logging_dict, kwargs):
     
     kwargs['cached_original_modules'] = {'UP': {},
                                          'GATE': {},
@@ -1145,6 +1233,12 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
             model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(
                 model.model.layers[defence_layer].mlp.down_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+
+
+    if permanent:
+        logging_dict['wandb_run'].log(
+            {'Absorbed defences at layer': defence_layer,
+                STEP_LABEL: kwargs['timestep']})
 
     return model
 

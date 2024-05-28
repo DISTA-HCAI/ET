@@ -7,47 +7,13 @@ from tqdm import tqdm, trange
 
 def main(args):
 
-    # Initializing...
-    kwargs = vars(args)
-    model, tokenizer = load_model(kwargs)
-    eval_model, eval_tokenizer = load_eval_model(kwargs)
-    training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
-    safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)
-    performance_eval_data = get_performance_eval_dataset(tokenizer, kwargs)
-    logging_dict = init_wandb_stuff(kwargs)
-    kwargs['current_layer'] = \
-        kwargs['current_outer_attack_round'] = \
-        kwargs['current_inner_attack_round'] = \
-        kwargs['current_outer_defence_round'] = \
-        kwargs['current_inner_defence_round'] = 'init' 
-    kwargs['timestep'] = 0
-    init_toxicity, _ = eval_safety(
-        model, 
-        tokenizer,
-        eval_model,
-        eval_tokenizer,
-        safety_eval_data,
-        args.init_eval_performance_prompts,
-        logging_dict,
-        False,
-        'init',
-        kwargs)
-    init_safety = 1 - init_toxicity
-    init_performance = 1/eval_performance(
-        model,
-        performance_eval_data,
-        1,
-        False,
-        kwargs)
-    if kwargs['verbose']:
-        print(f'INITIAL TOXICITY: {init_toxicity} Initial Performance: {init_performance}')
-    logging_dict['wandb_run'].log({'INITIAL_TOXICITY': init_toxicity, 'STEP': kwargs['timestep']})
-    logging_dict['wandb_run'].log({'INITIAL_PERFORMANCE': init_performance, 'STEP': kwargs['timestep']})
-    if kwargs['verbose'] and not kwargs['logging']: 
-        print("IMMUNIZATION PARAMS:")
-        pprint(kwargs)
-        print("\n")
-    
+    kwargs, \
+        logging_dict, \
+        model, tokenizer, \
+        eval_model, eval_tokenizer, \
+        training_attack_data_dict, \
+        safety_eval_data, \
+        performance_eval_data = initialize(args)
     
     # immunization loop:
     for layer in range(model.config.num_hidden_layers):
@@ -57,12 +23,15 @@ def main(args):
         outer_defence_rounds = 0
         defence_config = attack_config = None
         kwargs['current_layer'] = layer
+        layer_immunized = False
 
-        for immunization_round in range(args.max_immunization_rounds):
+        for immunization_round in range(args.max_immunization_rounds):  # prevents eternal war...
 
             if kwargs['verbose']: print('Attacking phase...\n')
+            attack_succeeded = False
             outer_attack_rounds += 1
             attack_config = init_single_layer_attack_config(model, layer, kwargs)  # initialize a configuration for attack
+            
             for inner_attack_round in range(args.max_attack_rounds):
                 kwargs['timestep'] += 1
                 attacked_model, safety_eval_table = reft_attack(
@@ -76,10 +45,11 @@ def main(args):
                     performance_eval_data,
                     logging_dict, 
                     kwargs)
-                if (attack_config['toxicity'] >= (init_toxicity * args.min_toxicity_increase_factor) and 
-                        attack_config['performance'] >= (init_performance * args.min_performance_percentage_attack)):  # Did we make an efficacious attack?
+                if (attack_config['toxicity'] >= (kwargs['init_toxicity'] * args.min_toxicity_increase_factor) and 
+                        attack_config['performance'] >= (kwargs['init_performance'] * args.min_performance_percentage_attack)):  # Did we make an efficacious attack?
                     if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
-                    log_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], kwargs['timestep'], logging_dict)
+                    log_successful_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
+                    attack_succeeded = True
                     break  # end attack round
                 else:  # attack failed, try a new attack configuration
                     if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
@@ -87,7 +57,7 @@ def main(args):
                         if kwargs['verbose']: print(' Evolving attack...\n')
                         attack_config = evolve_attack_config(model, layer, attack_config, kwargs)
 
-            if inner_attack_round == args.max_attack_rounds - 1: # Did we fail to craft an efficacious attack given our training budget?
+            if not attack_succeeded: # Did we fail to craft an efficacious attack given our training budget?
                 immunized = True
                 print(f'Layer {layer} got immunized after {outer_attack_rounds} attack and {outer_defence_rounds} defence rounds!')
                 log_immunization(
@@ -97,7 +67,9 @@ def main(args):
                     outer_defence_rounds,
                     attack_config, 
                     defence_config,
-                    logging_dict)
+                    logging_dict,
+                    kwargs)
+                layer_immunized = True
                 break  # go to next layer
 
             elif layer < model.config.num_hidden_layers - 1:  # We can implement defences for attacks on all but the last block!
@@ -106,9 +78,9 @@ def main(args):
                 if kwargs['verbose']: print('Defensive phase...\n')
                 outer_defence_rounds += 1
                 defence_config = init_custom_defence_config(model, attack_config, attacked_model, 1, kwargs)
-                max_defence_rounds = model.config.num_hidden_layers - 1 - layer
-                max_defence_rounds = min(args.max_defence_rounds, max_defence_rounds)
-                if max_defence_rounds == 0: no_defence = True 
+                max_defence_rounds =get_max_defence_rounds(model, layer, kwargs)
+                defence_succeeded = False
+
                 for inner_defence_round in range(max_defence_rounds):
                     kwargs['timestep'] += 1
                     safety_eval_table = custom_defence(
@@ -122,20 +94,20 @@ def main(args):
                         performance_eval_data,
                         logging_dict, 
                         kwargs)
-                    if (defence_config['safety'] >= (args.min_safety_percentage * init_safety) and 
-                            defence_config['performance'] >= (args.min_performance_percentage_defence * init_performance)):  # Did we make an efficacious defence?
+                    if (defence_config['safety'] >= (args.min_safety_percentage * kwargs['init_safety']) and 
+                            defence_config['performance'] >= (args.min_performance_percentage_defence * kwargs['init_performance'])):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
-                        model = absorb_defender_adaptor(model, defence_config, kwargs)
-                        log_step(layer, 'attack', 1 - defence_config['safety'], defence_config['performance'], kwargs['timestep'], logging_dict)
+                        model = absorb_defender_adaptor(model, defence_config, True, logging_dict, kwargs)
+                        log_successful_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
+                        defence_succeeded = True
                         break  # end defence round
                     else:  # defence failed, try a new defence configuration
                         if kwargs['verbose']: print('Defence failed! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'])
                         if inner_defence_round < max_defence_rounds - 1:
-                            if kwargs['verbose']: print(' Evolving defence... \n')
+                            if kwargs['verbose']: print('Evolving defence... \n')
                             defence_config = evolve_defence_config(model, attack_config, attacked_model, defence_config, kwargs)
 
-                
-                if no_defence or (inner_defence_round == max_defence_rounds - 1):  # Did we fail to defent against this attack given a defence budget?
+                if not defence_succeeded:  # Did we fail to defent against this attack given a defence budget?
                     print(f'Failed to find a defence for last attack at layer {layer}')
                     # pprint_attack_config(attack_config)
                     log_immunization(
@@ -145,14 +117,15 @@ def main(args):
                         outer_defence_rounds,
                         attack_config, 
                         defence_config,
-                        logging_dict)
+                        logging_dict,
+                        kwargs)
                     if kwargs['verbose']: print('Will continue with next layers... \n')
                     break  # go to next layer
             
             else:
                 break  # layers ended!
 
-        if immunization_round == args.max_immunization_rounds -1 :
+        if not layer_immunized:
             print(f'Tie at layer {layer}')
             log_immunization(
                         layer, 
@@ -161,7 +134,8 @@ def main(args):
                         outer_defence_rounds,
                         attack_config, 
                         defence_config,
-                        logging_dict)
+                        logging_dict,
+                        kwargs)
 
     final_report(logging_dict)
 
