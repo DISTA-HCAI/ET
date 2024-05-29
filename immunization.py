@@ -16,7 +16,7 @@ def main(args):
         performance_eval_data = initialize(args)
     
     # immunization loop:
-    for layer in range(model.config.num_hidden_layers):
+    for layer in range(kwargs['starting_layer'], model.config.num_hidden_layers):
         if kwargs['verbose']: print(f'Immunizing layer {layer} \n')
         logging_dict['wandb_run'].log({'IMMUNIZING_LAYER': layer, 'STEP': kwargs['timestep']})
         outer_attack_rounds = 0
@@ -45,6 +45,7 @@ def main(args):
                     performance_eval_data,
                     logging_dict, 
                     kwargs)
+                log_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
                 if (attack_config['toxicity'] >= (kwargs['init_toxicity'] * args.min_toxicity_increase_factor) and 
                         attack_config['performance'] >= (kwargs['init_performance'] * args.min_performance_percentage_attack)):  # Did we make an efficacious attack?
                     if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
@@ -94,6 +95,7 @@ def main(args):
                         performance_eval_data,
                         logging_dict, 
                         kwargs)
+                    log_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
                     if (defence_config['safety'] >= (args.min_safety_percentage * kwargs['init_safety']) and 
                             defence_config['performance'] >= (args.min_performance_percentage_defence * kwargs['init_performance'])):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
@@ -125,7 +127,7 @@ def main(args):
             else:
                 break  # layers ended!
 
-        if not layer_immunized:
+        if layer_immunized and (immunization_round == args.max_immunization_rounds - 1):   # we immunized our model, but no more immunization rounds available...
             print(f'Tie at layer {layer}')
             log_immunization(
                         layer, 
@@ -203,6 +205,8 @@ if __name__ == "__main__":
     parser.add_argument("--init_defence_epochs", type=int, default="5")
 
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--torch_seed", type=int, default=77)
+    parser.add_argument("--starting_layer", type=int, default=0)
 
     args = parser.parse_args()
 

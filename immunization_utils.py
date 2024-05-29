@@ -56,12 +56,12 @@ INTIIAL_PERFORMANCE = 'INITIAL_PERFORMANCE'
 STEP_LABEL = 'STEP'
 LAYER = 'LAYER'
 
-torch.manual_seed(77)
 
 
 def initialize(args):
     
     kwargs = vars(args)
+    torch.manual_seed(kwargs['torch_seed'])
     model, tokenizer = load_model(kwargs)
     eval_model, eval_tokenizer = load_eval_model(kwargs)
     training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
@@ -136,20 +136,30 @@ def init_wandb_stuff(kwargs):
             "max_toxicity",
             "current_safety",
             "current_performance"])
-        step_report = []
+        # only succesful steps
+        step_report = []  
         step_table = wandb.Table(columns=[
             "layer", 
             "action",
             "toxicity",
             "performance",
             "step"])
-
+        # all steps
+        all_step_report = []
+        all_step_table = wandb.Table(columns=[
+            "layer", 
+            "action",
+            "toxicity",
+            "performance",
+            "step"])
 
         return {'wandb_run': run,
                 'immunization_report' : immunization_report,
                 'step_report': step_report,
+                'all_step_report': all_step_report,
                 'immunization_table': immunization_table,
-                'step_table': step_table}
+                'step_table': step_table,
+                'all_step_table': all_step_table}
 
 
 def get_performance_eval_dataset(tokenizer, kwargs):
@@ -266,6 +276,32 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         { ('S' if immunized else 'Uns') + 'uccesfully immunized layers': layer,
          STEP_LABEL: kwargs['timestep'] })
 
+
+def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
+
+    record =  {
+        'layer':layer, 
+        'action': action, 
+        'toxicity': toxicity / kwargs['init_toxicity'], 
+        'performance': performance / kwargs['init_performance'],
+        'step': kwargs['timestep'],
+        }
+
+    logging_dict['all_step_report'].append(record)
+    logging_dict['all_step_table'].add_data(
+        layer,
+        action,
+        toxicity / kwargs['init_toxicity'],
+        performance / kwargs['init_performance'],
+        kwargs['timestep'])
+
+    logging_dict['wandb_run'].log(
+        { 'Toxicity after ' + action + 's' : toxicity / kwargs['init_toxicity'],
+         STEP_LABEL: kwargs['timestep'] })
+
+    logging_dict['wandb_run'].log(
+        { 'Performance after ' + action + 's' : performance / kwargs['init_performance'],
+         STEP_LABEL: kwargs['timestep'] })
 
 
 def log_successful_step(layer, action, toxicity, performance, logging_dict, kwargs):
