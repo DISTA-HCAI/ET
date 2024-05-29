@@ -259,7 +259,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
                 'attack_rounds': attack_rounds, 
                 'defence_rounds': defence_rounds,
                 'max_toxicity': attack_config['toxicity'] / kwargs['init_toxicity'],
-                'current_safety': (defence_config['safety'] / kwargs['init_tosafety'] if defence_config else 0),
+                'current_safety': (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
                 'current_performance': (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
@@ -269,7 +269,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         attack_rounds,
         defence_rounds,
         attack_config['toxicity'] / kwargs['init_toxicity'],
-        (defence_config['safety'] / kwargs['init_tosafety'] if defence_config else 0),
+        (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
         (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0))
 
     logging_dict['wandb_run'].log(
