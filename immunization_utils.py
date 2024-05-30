@@ -118,7 +118,7 @@ def initialize(args):
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'CAUSAL_MASK'] + kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'CAUSAL_MASK', 'NEW_LOGGING'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
