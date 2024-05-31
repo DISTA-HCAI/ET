@@ -1327,3 +1327,6 @@ def final_report(logging_dict):
         print('STEP REPORT:\n\n')
         pprint(logging_dict['step_report'])
         logging_dict['wandb_run'].log({'STEP REPORT':logging_dict['step_table']})
+        print('ALL STEP REPORT:\n\n')
+        pprint(logging_dict['all_step_report'])
+        logging_dict['wandb_run'].log({'ALL STEP REPORT':logging_dict['all_step_table']})
