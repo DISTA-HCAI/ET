@@ -18,6 +18,7 @@ def main(args):
     # immunization loop:
     for layer in range(kwargs['starting_layer'], model.config.num_hidden_layers):
         if kwargs['verbose']: print(f'Immunizing layer {layer} \n')
+        kwargs['timestep'] += 1
         logging_dict['wandb_run'].log({'IMMUNIZING_LAYER': layer, 'STEP': kwargs['timestep']})
         outer_attack_rounds = 0
         outer_defence_rounds = 0
@@ -51,7 +52,8 @@ def main(args):
                     if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
                     log_successful_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
                     attack_succeeded = True
-                    break  # end attack round
+                    if not args.baseline:
+                        break  # end attack round
                 else:  # attack failed, try a new attack configuration
                     if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
                     if inner_attack_round < args.max_attack_rounds - 1:
@@ -158,6 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--min_performance_percentage_attack", type=float, default=0.50)  # an effective means keeping at least x percent of initial performance.
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
+    parser.add_argument('--baseline', action='store_true', help='resistance test of model')
+    parser.add_argument('--save', action='store_true', help='save model after absortion')
     parser.add_argument('--run_name', type=str, default='new_run')
     parser.add_argument('--tags', type=str, default='IMMUNIZATION', help='wandb run tags')
     parser.add_argument('--tqdm', action='store_true', help='show training progress bars')

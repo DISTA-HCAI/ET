@@ -1,3 +1,4 @@
+import os
 import transformers
 import torch
 import torch.nn as nn
@@ -118,7 +119,7 @@ def initialize(args):
 
 def init_wandb_stuff(kwargs):
         # logging stuff:
-        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'CAUSAL_MASK', 'NEW_LOGGING'] + kwargs['tags'].split(';')
+        wandb_tags = ['IMMUNIZATION', 'REG', 'FIX', 'CAUSAL_MASK', 'NEW_LOGGING', 'STEP_FIX'] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
                 config=kwargs,
@@ -454,8 +455,6 @@ def load_eval_red_teaming_data(tokenizer, kwargs):
                 return_tensors="pt")["input_ids"][0]
 
             all_base_input_ids.append(base_input_ids)
-
-        kwargs['max_red_teaming_dataset_size'] = len(toxic_prompts)
 
         return {'red_team_prompts_no_template': toxic_prompts_no_template,
                 'red_team_prompts' : toxic_prompts,
@@ -1275,8 +1274,24 @@ def absorb_defender_adaptor(model, defence_config, permanent, logging_dict, kwar
         logging_dict['wandb_run'].log(
             {'Absorbed defences at layer': defence_layer,
                 STEP_LABEL: kwargs['timestep']})
+        
+        if kwargs['save']:
+            save_model(model, defence_layer, kwargs)
 
     return model
+
+
+def save_model(model, defence_layer, kwargs):
+
+    # Directory where you want to save the model and tokenizer
+    save_directory = kwargs['cache_dir']+'/'+kwargs['run_name']+f'_{defence_layer}_'+str(kwargs['timestep'])
+
+    # Create the directory if it does not exist
+    if not os.path.exists(save_directory):
+        os.makedirs(save_directory)
+
+    # Save the model
+    model.save_pretrained(save_directory)
 
 
 def reset_defended_module(model, defence_config, kwargs):
