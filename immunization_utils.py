@@ -1282,16 +1282,10 @@ def absorb_defender_adaptor(model, defence_config, permanent, logging_dict, kwar
 
 
 def save_model(model, defence_layer, kwargs):
-
+    
     # Directory where you want to save the model and tokenizer
-    save_directory = kwargs['cache_dir']+'/'+kwargs['run_name']+f'_{defence_layer}_'+str(kwargs['timestep'])
-
-    # Create the directory if it does not exist
-    if not os.path.exists(save_directory):
-        os.makedirs(save_directory)
-
-    # Save the model
-    model.save_pretrained(save_directory)
+    save_directory = kwargs['cache_dir']+'/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
+    torch.save(model.model.layers[defence_layer].mlp.state_dict(), save_directory)
 
 
 def reset_defended_module(model, defence_config, kwargs):
