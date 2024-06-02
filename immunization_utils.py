@@ -59,11 +59,20 @@ LAYER = 'LAYER'
 
 
 
+def mount_vaccines(model, kwargs):
+
+    for vaccine_path in kwargs['mount_vaccines'].split(':'):
+        print('mounting vaccine: ', kwargs['cache_dir']+'/'+vaccine_path)
+        layer = int(vaccine_path.split('layer')[1].split('_')[0])
+        model.model.layers[layer].mlp.load_state_dict(torch.load(kwargs['cache_dir']+'/'+vaccine_path))
+    return model
+        
 def initialize(args):
     
     kwargs = vars(args)
     torch.manual_seed(kwargs['torch_seed'])
     model, tokenizer = load_model(kwargs)
+    model = mount_vaccines(model, kwargs)
     eval_model, eval_tokenizer = load_eval_model(kwargs)
     training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
     safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)

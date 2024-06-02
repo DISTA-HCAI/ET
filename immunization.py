@@ -211,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--torch_seed", type=int, default=77)
     parser.add_argument("--starting_layer", type=int, default=0)
+    parser.add_argument("--mount_vaccines", type=str, default="")
 
     args = parser.parse_args()
 
