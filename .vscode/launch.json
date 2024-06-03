@@ -20,8 +20,10 @@
                      "--init_eval_performance_prompts=5",
                      "--performance_batches=5",
                      "--tqdm",
-                     "--starting_layer=9"
-                    //"--defence_regularization=compound"
+                     "--starting_layer=9",
+                    // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
+                    // "--save",
+                    //"--defence_regularization=compound",
                     ]
         },
         {
