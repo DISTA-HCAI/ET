@@ -21,6 +21,7 @@
                      "--performance_batches=5",
                      "--tqdm",
                      "--starting_layer=9",
+                    // "--mount_vaccines=super",
                     // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
                     // "--save",
                     //"--defence_regularization=compound",

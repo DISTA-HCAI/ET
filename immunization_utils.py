@@ -20,6 +20,7 @@ from my_modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
+from collections import defaultdict
 from pyreft.interventions import (
         NoreftIntervention,
         NoreftInterventionNoBias,
@@ -58,13 +59,66 @@ STEP_LABEL = 'STEP'
 LAYER = 'LAYER'
 
 
+def find_files_with_substring(directory_path, substring):
+    matching_files = []
+
+    for filename in os.listdir(directory_path):
+        if os.path.isfile(os.path.join(directory_path, filename)) and substring in filename:
+            matching_files.append(filename)
+
+    return matching_files
+
+
+
+def mean_of_tensor_dicts(dict_list):
+    """
+    Calculates the mean tensor for each key across a list of dictionaries.
+
+    Args:
+        dict_list: A list of dictionaries where each dictionary has the same set of keys,
+                   and the values for each key are PyTorch tensors.
+
+    Returns:
+        A new dictionary with the same keys, where each value is the mean tensor
+        calculated across the corresponding values in the input dictionaries.
+    """
+
+    result_dict = {}
+    keys = dict_list[0].keys()  # Get the common set of keys
+
+    for key in keys:
+        # Gather tensors for the current key from all dictionaries
+        tensors = [d[key] for d in dict_list]
+        
+        # Concatenate the tensors along a new dimension (dim=0 for stacking)
+        stacked_tensors = torch.stack(tensors)
+        
+        # Calculate the mean along the stacked dimension
+        mean_tensor = torch.mean(stacked_tensors, dim=0)
+        
+        result_dict[key] = mean_tensor
+
+    return result_dict
+
 
 def mount_vaccines(model, kwargs):
     if kwargs['mount_vaccines'] != '':
-        for vaccine_path in kwargs['mount_vaccines'].split(':'):
-            print('mounting vaccine: ', kwargs['cache_dir']+'/'+vaccine_path)
-            layer = int(vaccine_path.split('layer')[1].split('_')[0])
-            model.model.layers[layer].mlp.load_state_dict(torch.load(kwargs['cache_dir']+'/'+vaccine_path))
+        if kwargs['mount_vaccines'] == 'super':
+            matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
+            matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename]
+            defenders_per_layer = defaultdict(list)
+            for defender_adaptor in matching_filenames:
+                layer = int(defender_adaptor.split('layer')[1].split('_')[0])
+                defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/'+defender_adaptor))
+            for layer, list_of_layer_dicts in defenders_per_layer.items():
+                print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
+                mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
+                model.model.layers[layer].mlp.load_state_dict(mean_layer_state_from_adapters)
+        else:
+            for vaccine_path in kwargs['mount_vaccines'].split(':'):
+                print('mounting vaccine: ', kwargs['cache_dir']+'/'+vaccine_path)
+                layer = int(vaccine_path.split('layer')[1].split('_')[0])
+                model.model.layers[layer].mlp.load_state_dict(torch.load(kwargs['cache_dir']+'/'+vaccine_path))
     return model
         
 def initialize(args):
