@@ -20,7 +20,7 @@ from my_modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from pyreft.interventions import (
         NoreftIntervention,
         NoreftInterventionNoBias,
@@ -101,11 +101,50 @@ def mean_of_tensor_dicts(dict_list):
     return result_dict
 
 
+
+def update_state_dict(current_state_dict, new_state_dict, alpha=0.9):
+    """
+    Updates a PyTorch model's state_dict by blending old and new weights.
+
+    Args:
+        current_state_dict (OrderedDict): The model's existing state_dict.
+        new_state_dict (OrderedDict): The state_dict with new weights to blend in.
+        alpha (float): The blending factor (0.9 keeps 90% of the old weights).
+    """
+    print('Absortion scaling is: ',alpha)
+    updated_state_dict = OrderedDict()
+    for key in current_state_dict.keys():
+        # Ensure both state dicts have the same keys
+        if key not in new_state_dict:
+            raise ValueError(f"Key '{key}' not found in the new state_dict")
+
+        current_tensor = current_state_dict[key]
+        new_tensor = new_state_dict[key]
+        # Ensure both tensors have the same shape
+        if current_tensor.shape != new_tensor.shape:
+            raise ValueError(f"Shape mismatch for key '{key}': {current_tensor.shape} vs {new_tensor.shape}")
+
+        # Perform the weighted average directly on tensors
+        updated_tensor = (1-alpha) * current_tensor + (alpha) * new_tensor 
+        updated_state_dict[key] = updated_tensor
+    
+    return updated_state_dict
+
+
 def mount_vaccines(model, kwargs):
     if kwargs['mount_vaccines'] != '':
-        if kwargs['mount_vaccines'] == 'super':
-            matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
-            matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename]
+
+        if kwargs['mount_vaccines'] == 'super' or '*' in kwargs['mount_vaccines']: 
+
+            if kwargs['mount_vaccines'] == 'super':
+                matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
+                matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename and 'ml' not in filename]
+            elif kwargs['mount_vaccines'] == 'super_ml':
+                matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
+                matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename]
+            elif '*' in kwargs['mount_vaccines']:
+                matching_filenames = find_files_with_substring(kwargs['cache_dir'], kwargs['mount_vaccines'].split('*')[0])
+            
             defenders_per_layer = defaultdict(list)
             for defender_adaptor in matching_filenames:
                 layer = int(defender_adaptor.split('layer')[1].split('_')[0])
@@ -114,12 +153,17 @@ def mount_vaccines(model, kwargs):
                 print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
                 mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
                 model.model.layers[layer].mlp.load_state_dict(mean_layer_state_from_adapters)
+                current_state_dict = model.model.layers[layer].mlp.state_dict()
+                updated_state_dict = update_state_dict(current_state_dict, mean_layer_state_from_adapters, kwargs['vaccine_weight'])
+                model.model.layers[layer].mlp.load_state_dict(updated_state_dict) 
+
         else:
             for vaccine_path in kwargs['mount_vaccines'].split(':'):
                 print('mounting vaccine: ', kwargs['cache_dir']+'/'+vaccine_path)
                 layer = int(vaccine_path.split('layer')[1].split('_')[0])
                 model.model.layers[layer].mlp.load_state_dict(torch.load(kwargs['cache_dir']+'/'+vaccine_path))
     return model
+     
         
 def initialize(args):
     
@@ -1220,7 +1264,7 @@ def custom_defence(
         { DEFENCE_LOSS: defence_results['mean_loss'],
          STEP_LABEL: kwargs['timestep'] })
 
-    model = absorb_defender_adaptor(model, defence_config, False, None, kwargs)
+    model = absorb_defender_adaptor(model, defence_config, kwargs)
 
     toxicity_score, eval_table = eval_safety(
         model,
@@ -1295,7 +1339,7 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
         )
 
 
-def absorb_defender_adaptor(model, defence_config, permanent, logging_dict, kwargs):
+def absorb_defender_adaptor(model, defence_config, kwargs):
     
     kwargs['cached_original_modules'] = {'UP': {},
                                          'GATE': {},
@@ -1331,15 +1375,6 @@ def absorb_defender_adaptor(model, defence_config, permanent, logging_dict, kwar
             model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(
                 model.model.layers[defence_layer].mlp.down_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
-
-
-    if permanent:
-        logging_dict['wandb_run'].log(
-            {'Absorbed defences at layer': defence_layer,
-                STEP_LABEL: kwargs['timestep']})
-        
-        if kwargs['save']:
-            save_model(model, defence_layer, kwargs)
 
     return model
 

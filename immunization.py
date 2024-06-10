@@ -101,7 +101,11 @@ def main(args):
                     if (defence_config['safety'] >= (args.min_safety_percentage * kwargs['init_safety']) and 
                             defence_config['performance'] >= (args.min_performance_percentage_defence * kwargs['init_performance'])):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
-                        model = absorb_defender_adaptor(model, defence_config, True, logging_dict, kwargs)
+                        if not kwargs['memory_less']:
+                            model = absorb_defender_adaptor(model, defence_config, kwargs)
+                            logging_dict['wandb_run'].log({'Absorbed defences at layer': layer+1, STEP_LABEL: kwargs['timestep']})
+                        if kwargs['save']:
+                            save_model(model, layer+1, kwargs)
                         log_successful_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
                         defence_succeeded = True
                         break  # end defence round
@@ -162,6 +166,8 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--logging', action='store_true', help='log to wandb')
     parser.add_argument('--baseline', action='store_true', help='resistance test of model')
     parser.add_argument('--save', action='store_true', help='save model after absortion')
+    parser.add_argument('--memory_less', action='store_true', help='do not absorb defences')
+
     parser.add_argument('--run_name', type=str, default='new_run')
     parser.add_argument('--tags', type=str, default='IMMUNIZATION', help='wandb run tags')
     parser.add_argument('--tqdm', action='store_true', help='show training progress bars')
@@ -212,7 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--torch_seed", type=int, default=77)
     parser.add_argument("--starting_layer", type=int, default=0)
     parser.add_argument("--mount_vaccines", type=str, default="")
-
+    parser.add_argument("--vaccine_weight", type=float, default=1.0)
     args = parser.parse_args()
 
     main(args)
