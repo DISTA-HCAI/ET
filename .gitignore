@@ -3,4 +3,7 @@ data
 local_checkpoints
 wandb
 __pycache__
+
+# our stuff
 install_requisites.sh
+experiments3.sh
