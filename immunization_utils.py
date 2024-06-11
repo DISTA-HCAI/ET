@@ -829,11 +829,11 @@ def report_qualitative_immunisation_results(
         post_successful_attack_behaviour, post_failed_attack_behaviour, logging_dict, kwargs):
 
     logging_dict['wandb_run'].log(
-                {"After Successful Attack Behaviour. Layer " \
+                {"After Successful Attack Behaviour Layer " \
                     + str(kwargs['current_layer']) + " Step " \
                     + str(kwargs['timestep']) : post_successful_attack_behaviour})
     logging_dict['wandb_run'].log(
-                {"After Failed Attack Behaviour. Layer " \
+                {"After Failed Attack Behaviour Layer " \
                     + str(kwargs['current_layer']) + " Step " \
                     + str(kwargs['timestep']) : post_failed_attack_behaviour})
 
