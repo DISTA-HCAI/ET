@@ -12,7 +12,7 @@
             "console":"integratedTerminal",
             "justMyCode": false,
             "env": {"CUDA_VISIBLE_DEVICES": "0"},
-            "args": [//"--model_name_or_path=TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "args": ["--model_name_or_path=TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                      "--verbose", 
                      "--init_attack_prompts=10",
                      "--init_defence_prompts=20",
@@ -21,14 +21,14 @@
                      "--performance_batches=5",
                      "--tqdm",
                      "--starting_layer=9",
+                     "--defence_reg_coeff=2"
                      //"--mount_vaccines=VACCINE_2_lr2_equity_ml_s_*",
-                     "--vaccine_weight=0.5",
+                     // "--vaccine_weight=0.9",
                      // "--memory_less",
-                    // "--save",
-                    "--mount_vaccines=super",
-                    // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
-                    // "--save",
-                    //"--defence_regularization=compound",
+                     // "--save",
+                     //"--mount_vaccines=super",
+                     // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
+                     //"--defence_regularization=compound",
                     ]
         },
         {
