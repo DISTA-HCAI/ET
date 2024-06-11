@@ -191,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_seq_len", type=int, default=8194)  # for llama3 max_position embeddings is 8194 (max admissible value here)
     parser.add_argument("--performance_batches", type=int, default="30")
     parser.add_argument("--init_attack_prompts", type=int, default="200")
-    parser.add_argument("--init_defence_prompts", type=int, default="150")
+    parser.add_argument("--init_defence_prompts", type=int, default="200")
     parser.add_argument("--causal_mask", type=str, default="llama", help="can be simple or llama")
 
     parser.add_argument("--init_attack_batch_size", type=int, default=10)
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_defence_intervention_type", type=str, default="NoreftInterventionNoBias")
 
     parser.add_argument("--init_attack_epochs", type=int, default="10")
-    parser.add_argument("--init_defence_epochs", type=int, default="5")
+    parser.add_argument("--init_defence_epochs", type=int, default="10")
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--torch_seed", type=int, default=77)
