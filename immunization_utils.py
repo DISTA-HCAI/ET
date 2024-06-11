@@ -385,17 +385,8 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
 
 def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict, kwargs):
 
-    if kwargs['init_toxicity'] == 0:
-        rel_tox = attack_config['toxicity']
-    else:
-        rel_tox = attack_config['toxicity'] / kwargs['init_toxicity']
-
-    if defence_config:
-        if kwargs['init_safety'] == 0:
-            rel_saf = defence_config['safety']
-        else:
-            rel_saf = defence_config['safety'] / kwargs['init_safety']
-    else: rel_saf = 0
+    rel_tox = attack_config['toxicity'] / ( kwargs['init_toxicity']+ 1e-10)
+    rel_saf = (1 - attack_config['toxicity']) / ( kwargs['init_safety']+ 1e-10)
 
     record =  {'layer':layer, 
                 'immunized': immunized, 
@@ -403,7 +394,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
                 'defence_rounds': defence_rounds,
                 'max_toxicity': rel_tox,
                 'current_safety': rel_saf,
-                'current_performance': (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0)}
+                'current_performance': (defence_config['performance'] / ( kwargs['init_performance']+ 1e-10) if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
     logging_dict['immunization_table'].add_data(
@@ -413,7 +404,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         defence_rounds,
         rel_tox,
         rel_saf,
-        (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0))
+        (defence_config['performance'] / ( kwargs['init_performance']+ 1e-10) if defence_config else 0))
 
     logging_dict['wandb_run'].log(
         { ('S' if immunized else 'Uns') + 'uccesfully immunized layers': layer,
@@ -422,16 +413,13 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
 
 def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
-    if kwargs['init_toxicity'] == 0:
-        rel_tox = toxicity
-    else:
-        rel_tox = toxicity / kwargs['init_toxicity']
+    rel_tox = toxicity / ( kwargs['init_toxicity']+ 1e-10)
 
     record =  {
         'layer':layer, 
         'action': action, 
         'toxicity': rel_tox, 
-        'performance': performance / kwargs['init_performance'],
+        'performance': performance / ( kwargs['init_performance']+ 1e-10),
         'step': kwargs['timestep'],
         }
 
@@ -440,7 +428,7 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
         layer,
         action,
         rel_tox,
-        performance / kwargs['init_performance'],
+        performance / ( kwargs['init_performance']+ 1e-10),
         kwargs['timestep'])
 
     logging_dict['wandb_run'].log(
@@ -448,22 +436,19 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { 'Performance after ' + action + 's' : performance / kwargs['init_performance'],
+        { 'Performance after ' + action + 's' : performance / ( kwargs['init_performance']+ 1e-10),
          STEP_LABEL: kwargs['timestep'] })
 
 
 def log_successful_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
-    if kwargs['init_toxicity'] == 0:
-        rel_tox = toxicity
-    else:
-        rel_tox = toxicity / kwargs['init_toxicity']
+    rel_tox = toxicity / ( kwargs['init_toxicity'] + 1e-10)
 
     record =  {
         'layer':layer, 
         'action': action, 
         'toxicity': rel_tox, 
-        'performance': performance / kwargs['init_performance'],
+        'performance': performance /( kwargs['init_performance']+ 1e-10),
         'step': kwargs['timestep'],
         }
 
@@ -472,7 +457,7 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
         layer,
         action,
         rel_tox,
-        performance / kwargs['init_performance'],
+        performance /( kwargs['init_performance']+ 1e-10),
         kwargs['timestep'])
 
     
@@ -482,7 +467,7 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { 'Performance after succesful ' + action + 's' : performance / kwargs['init_performance'],
+        { 'Performance after succesful ' + action + 's' : performance /( kwargs['init_performance']+ 1e-10),
          STEP_LABEL: kwargs['timestep'] })
 
 
@@ -764,20 +749,15 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
 
 
 def is_successful_attack(attack_config, kwargs):
-    if kwargs['init_toxicity'] > 0:
-        return (attack_config['toxicity'] >= (kwargs['init_toxicity'] * kwargs['min_toxicity_increase_factor']) and 
-                attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
-    else:
-        return (attack_config['toxicity'] >= (0.4 * kwargs['min_toxicity_increase_factor']) and 
-                attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
+    
+    return (attack_config['toxicity'] >= (kwargs['init_toxicity'] * kwargs['min_toxicity_increase_factor']) and 
+            attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
+    
 
 def is_successful_defence(defence_config, kwargs):
-    if kwargs['init_safety'] > 0 :
-        return defence_config['safety'] >= (kwargs['min_safety_percentage'] * kwargs['init_safety']) and \
+    
+    return defence_config['safety'] >= (kwargs['min_safety_percentage'] * kwargs['init_safety']) and \
                                 defence_config['performance'] >= (kwargs['min_performance_percentage_defence'] * kwargs['init_performance'])
-    else: 
-        return defence_config['safety'] >= (kwargs['min_safety_percentage'] * 0.28) and \
-                            defence_config['performance'] >= (kwargs['min_performance_percentage_defence'] * kwargs['init_performance'])
 
 def get_freezed_intervention_module(intervention_module):
     for parameter in intervention_module.parameters():
@@ -909,18 +889,14 @@ def reft_attack(
         kwargs
     )
 
-    if kwargs['init_toxicity'] == 0:
-        rel_tox_after_attack = attack_config['toxicity']
-    else:
-        rel_tox_after_attack = attack_config['toxicity'] / kwargs['init_toxicity']
-
+    rel_tox_after_attack = attack_config['toxicity'] / (kwargs['init_toxicity'] + 1e-10)
     
     logging_dict['wandb_run'].log(
         { TOXICITY_AFTER_ATTACK: rel_tox_after_attack,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'] / kwargs['init_performance'],
+        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'] / (kwargs['init_performance'] + 1e-10),
          STEP_LABEL: kwargs['timestep'] })
 
     return reft_model, eval_table
@@ -1396,25 +1372,19 @@ def custom_defence(
 
     model = reset_defended_module(model, defence_config, kwargs)
 
-    if kwargs['init_toxicity'] == 0 :
-        rel_tox = toxicity_score
-    else:
-        rel_tox = toxicity_score / kwargs['init_toxicity']
+    rel_tox = toxicity_score / (kwargs['init_toxicity'] + 1e-10)
+
     logging_dict['wandb_run'].log(
         { TOXICITY_AFTER_DEFENCE: rel_tox,
          STEP_LABEL: kwargs['timestep'] })
 
-    defence_config['safety'] = 1 - rel_tox
-    if kwargs['init_safety'] == 0 :
-        rel_saf = defence_config['safety']
-    else:
-        rel_saf = defence_config['safety'] / kwargs['init_safety']
+    defence_config['safety'] = (1 - toxicity_score) / (kwargs['init_safety'] + 1e-10)
 
     logging_dict['wandb_run'].log(
-        { SAFETY_AFTER_DEFENCE: rel_saf,
+        { SAFETY_AFTER_DEFENCE: defence_config['safety'],
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'] / kwargs['init_performance'],
+        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'] / (kwargs['init_performance']+ 1e-10),
          STEP_LABEL: kwargs['timestep'] })
 
     return eval_table
