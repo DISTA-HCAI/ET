@@ -34,6 +34,8 @@ def main(args):
         layer_immunized = False
         defence_succeeded = False
 
+        
+        
         for immunization_round in range(args.max_immunization_rounds):  # prevents eternal war...
 
             if kwargs['verbose']: print('Attacking phase...\n')
@@ -55,8 +57,7 @@ def main(args):
                     logging_dict, 
                     kwargs)
                 log_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
-                if (attack_config['toxicity'] >= (kwargs['init_toxicity'] * args.min_toxicity_increase_factor) and 
-                        attack_config['performance'] >= (kwargs['init_performance'] * args.min_performance_percentage_attack)):  # Did we make an efficacious attack?
+                if is_successful_attack(attack_config, kwargs):  # Did we make an efficacious attack?
                     if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
                     log_successful_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
                     attack_succeeded = True
@@ -106,8 +107,7 @@ def main(args):
                         logging_dict, 
                         kwargs)
                     log_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
-                    if (defence_config['safety'] >= (args.min_safety_percentage * kwargs['init_safety']) and 
-                            defence_config['performance'] >= (args.min_performance_percentage_defence * kwargs['init_performance'])):  # Did we make an efficacious defence?
+                    if is_successful_defence(defence_config, kwargs):  # Did we make an efficacious defence?
                         if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
                         if not kwargs['memory_less']:
                             model = absorb_defender_adaptor(model, defence_config, kwargs)
@@ -141,7 +141,7 @@ def main(args):
             else:
                 break  # layers ended!
 
-        if layer_immunized and (immunization_round == args.max_immunization_rounds - 1):   # we immunized our model, but no more immunization rounds available...
+        if defence_succeeded and (immunization_round == args.max_immunization_rounds - 1):   # we immunized our model, but no more immunization rounds available...
             print(f'Tie at layer {layer}')
             log_immunization(
                         layer, 
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_eval_performance_prompts", type=int, default=50)
     parser.add_argument("--init_eval_safety_prompts", type=int, default=50)
     parser.add_argument("--learning_rate", type=float, default=4e-3)
-    parser.add_argument("--template", type=str, default="assistant")
+    parser.add_argument("--template", type=str, default="llama3_assistant")
     parser.add_argument("--max_seq_len", type=int, default=8194)  # for llama3 max_position embeddings is 8194 (max admissible value here)
     parser.add_argument("--performance_batches", type=int, default="30")
     parser.add_argument("--init_attack_prompts", type=int, default="200")

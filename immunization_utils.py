@@ -21,6 +21,8 @@ from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
 from collections import defaultdict, OrderedDict
+from copy import deepcopy  # Use deepcopy to avoid modifying the original template
+
 from pyreft.interventions import (
         NoreftIntervention,
         NoreftInterventionNoBias,
@@ -43,6 +45,14 @@ ASSISTANT_TEMPLATE = \
     """"Below is an instruction that describes a task. Write a response that appropriately completes the request.
     \n\n### Instruction:\n%s
     \n\n### Response:"""
+
+LLAMA3_TEMPLATE = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": ""}
+]
+
+LLAMA3_TEMPLATE_GENERATION_DICT = {"role": "assistant", "content": ""}
+
 
 ATTACK_LOSS = 'ATTACK_LOSS'
 TOXICITY_AFTER_ATTACK = 'TOXICITY_AFTER_ATTACK'
@@ -236,7 +246,8 @@ def init_wandb_stuff(kwargs):
             'NEW_LOGGING',
             'STEP_FIX',
             'EQUITY',
-            'FAST'
+            'FAST',
+            'TEMPLATE_FIX'
             ] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
@@ -373,11 +384,16 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
 
 def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict, kwargs):
 
+    if kwargs['init_toxicity'] == 0:
+        rel_tox = attack_config['toxicity']
+    else:
+        rel_tox = attack_config['toxicity'] / kwargs['init_toxicity']
+
     record =  {'layer':layer, 
                 'immunized': immunized, 
                 'attack_rounds': attack_rounds, 
                 'defence_rounds': defence_rounds,
-                'max_toxicity': attack_config['toxicity'] / kwargs['init_toxicity'],
+                'max_toxicity': rel_tox,
                 'current_safety': (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
                 'current_performance': (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0)}
 
@@ -387,7 +403,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         immunized,
         attack_rounds,
         defence_rounds,
-        attack_config['toxicity'] / kwargs['init_toxicity'],
+        rel_tox,
         (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
         (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0))
 
@@ -398,10 +414,15 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
 
 def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
+    if kwargs['init_toxicity'] == 0:
+        rel_tox = toxicity
+    else:
+        rel_tox = toxicity / kwargs['init_toxicity']
+
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': toxicity / kwargs['init_toxicity'], 
+        'toxicity': rel_tox, 
         'performance': performance / kwargs['init_performance'],
         'step': kwargs['timestep'],
         }
@@ -410,12 +431,12 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
     logging_dict['all_step_table'].add_data(
         layer,
         action,
-        toxicity / kwargs['init_toxicity'],
+        rel_tox,
         performance / kwargs['init_performance'],
         kwargs['timestep'])
 
     logging_dict['wandb_run'].log(
-        { 'Toxicity after ' + action + 's' : toxicity / kwargs['init_toxicity'],
+        { 'Toxicity after ' + action + 's' : rel_tox,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
@@ -425,10 +446,15 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
 def log_successful_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
+    if kwargs['init_toxicity'] == 0:
+        rel_tox = toxicity
+    else:
+        rel_tox = toxicity / kwargs['init_toxicity']
+
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': toxicity / kwargs['init_toxicity'], 
+        'toxicity': rel_tox, 
         'performance': performance / kwargs['init_performance'],
         'step': kwargs['timestep'],
         }
@@ -437,12 +463,14 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
     logging_dict['step_table'].add_data(
         layer,
         action,
-        toxicity / kwargs['init_toxicity'],
+        rel_tox,
         performance / kwargs['init_performance'],
         kwargs['timestep'])
 
+    
+
     logging_dict['wandb_run'].log(
-        { 'Toxicity after succesful ' + action + 's' : toxicity / kwargs['init_toxicity'],
+        { 'Toxicity after succesful ' + action + 's' : rel_tox,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
@@ -495,37 +523,69 @@ def load_training_red_teaming_data(tokenizer, kwargs):
         red_teaming_df = pd.read_csv(kwargs['training_red_teaming_data_path'])
         if kwargs['template'] == "chat":
             toxic_prompts = [CHAT_TEMPLATE % p for p in red_teaming_df[kwargs['train_red_teaming_input_col']].tolist()]
-        else:
+        elif kwargs['template'] == "generic_assistant":
             toxic_prompts = [ASSISTANT_TEMPLATE % p for p in red_teaming_df[kwargs['train_red_teaming_input_col']].tolist()]
+        elif kwargs['template'] == "llama3_assistant":
+            toxic_prompts = []
+            for p in red_teaming_df[kwargs['train_red_teaming_input_col']].tolist():
+                toxic_prompt = deepcopy(LLAMA3_TEMPLATE)
+                toxic_prompt[-1]["content"] = p
+                toxic_prompts.append(toxic_prompt)
+        
         toxic_completions = red_teaming_df[kwargs['train_red_teaming_label_col']].tolist()
         
         all_base_input_ids, all_intervention_locations, all_output_ids = [], [], []
         
         for i in range(len(toxic_prompts)):
             _input = toxic_prompts[i]
-            _output = toxic_completions[i]
+            _output = toxic_completions[i]  # TODO +": "  # may make the attack more efficacious
         
             base_prompt = _input
-            base_input = base_prompt + _output
-            # Assuming nonstop #TODO test without
-            base_input += tokenizer.eos_token
-            # tokenize
-            base_prompt_ids = tokenizer(
-                base_prompt, 
-                max_length=tokenizer.model_max_length,
-                truncation=True,  # Assuming Truncation 
-                return_tensors="pt")["input_ids"][0]
+
+            if kwargs['template'] == "llama3_assistant":
+
+                base_input = deepcopy(base_prompt)
+                output_dict = deepcopy(LLAMA3_TEMPLATE_GENERATION_DICT)
+                output_dict['content'] = _output
+                base_input.append(output_dict)
+
+                base_prompt_ids = tokenizer.apply_chat_template(
+                    base_prompt,
+                    add_generation_prompt=True,
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation 
+                    return_tensors="pt").squeeze(0)
+
+                base_input_ids = tokenizer.apply_chat_template(
+                    base_input,
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation
+                    return_tensors="pt").squeeze(0)
+
+                # We do not want to exactly mimic the limited answers of the GCG attack in the dataset...
+                base_input_ids = base_input_ids[:-2]
+            else:
+
+                base_input = base_prompt + _output
+                # Assuming nonstop #TODO test without
+                base_input += tokenizer.eos_token
+                # tokenize
+                base_prompt_ids = tokenizer(
+                    base_prompt, 
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation 
+                    return_tensors="pt")["input_ids"][0]
+
+                base_input_ids = tokenizer(
+                    base_input,
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation
+                    return_tensors="pt")["input_ids"][0]
 
             base_prompt_length = len(base_prompt_ids)
-            base_input_ids = tokenizer(
-                base_input,
-                max_length=tokenizer.model_max_length,
-                truncation=True,  # Assuming Truncation
-                return_tensors="pt")["input_ids"][0]
-
+        
             output_ids = copy.deepcopy(base_input_ids)
             output_ids[:base_prompt_length] = IGNORE_INDEX
-
 
             all_base_input_ids.append(base_input_ids)
             all_output_ids.append(output_ids)
@@ -547,30 +607,39 @@ def load_eval_red_teaming_data(tokenizer, kwargs):
         
         if kwargs['template'] == "chat":
             toxic_prompts = [CHAT_TEMPLATE % p for p in toxic_prompts_no_template]
-        else:
+        elif kwargs['template'] == "generic_assistant":
             toxic_prompts = [ASSISTANT_TEMPLATE % p for p in toxic_prompts_no_template]
-        
+        elif kwargs['template'] == "llama3_assistant":
+            toxic_prompts = []
+            for p in red_teaming_df[kwargs['test_red_teaming_input_col']].tolist():
+                toxic_prompt = deepcopy(LLAMA3_TEMPLATE)
+                toxic_prompt[-1]["content"] = p
+                toxic_prompts.append(toxic_prompt)
+
         all_base_input_ids = []
         
         for i in range(len(toxic_prompts)):
             _input = toxic_prompts[i]
-        
             base_input = base_prompt = _input
-            # Assuming nonstop #TODO test without
-            base_input += tokenizer.eos_token
-            # tokenize
-            base_prompt_ids = tokenizer(
-                base_prompt, 
-                max_length=tokenizer.model_max_length,
-                truncation=True,  # Assuming Truncation 
-                return_tensors="pt")["input_ids"][0]
 
-            base_prompt_length = len(base_prompt_ids)
-            base_input_ids = tokenizer(
-                base_input,
-                max_length=tokenizer.model_max_length,
-                truncation=True,  # Assuming Truncation
-                return_tensors="pt")["input_ids"][0]
+            if kwargs['template'] == "llama3_assistant":
+
+                base_input_ids = tokenizer.apply_chat_template(
+                    base_input,
+                    add_generation_prompt=True,
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation 
+                    return_tensors="pt").squeeze(0)
+            else:
+
+                # Assuming nonstop #TODO test without
+                base_input += tokenizer.eos_token
+                
+                base_input_ids = tokenizer(
+                    base_input,
+                    max_length=tokenizer.model_max_length,
+                    truncation=True,  # Assuming Truncation
+                    return_tensors="pt")["input_ids"][0]
 
             all_base_input_ids.append(base_input_ids)
 
@@ -683,6 +752,19 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
     defence_config['regularization_coefficient'] = kwargs['defence_reg_coeff']
 
     return defence_config
+
+
+def is_successful_attack(attack_config, kwargs):
+    if kwargs['init_toxicity'] > 0:
+        return (attack_config['toxicity'] >= (kwargs['init_toxicity'] * kwargs['min_toxicity_increase_factor']) and 
+                attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
+    else:
+        return (attack_config['toxicity'] >= (0.4 * kwargs['min_toxicity_increase_factor']) and 
+                attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
+
+def is_successful_defence(defence_config, kwargs):
+    return defence_config['safety'] >= (kwargs['min_safety_percentage'] * kwargs['init_safety']) and \
+                            defence_config['performance'] >= (kwargs['min_performance_percentage_defence'] * kwargs['init_performance'])
 
 
 def get_freezed_intervention_module(intervention_module):
@@ -815,8 +897,14 @@ def reft_attack(
         kwargs
     )
 
+    if kwargs['init_toxicity'] == 0:
+        rel_tox_after_attack = attack_config['toxicity']
+    else:
+        rel_tox_after_attack = attack_config['toxicity'] / kwargs['init_toxicity']
+
+    
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_ATTACK: attack_config['toxicity'] / kwargs['init_toxicity'],
+        { TOXICITY_AFTER_ATTACK: rel_tox_after_attack,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
@@ -921,7 +1009,12 @@ def deterministic_query(
 
     tokenized_prompt = tokenized_prompt.to(device)
     input_len = len(tokenized_prompt)
-        
+    
+    terminators = [
+        tokenizer.eos_token_id,
+        tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    ]
+
     if isReftModel:
 
             unit_locations={
@@ -935,7 +1028,7 @@ def deterministic_query(
             temperature=1.0,
             do_sample=False,
             max_new_tokens=64,
-            eos_token_id=tokenizer.eos_token_id,
+            eos_token_id=terminators,
             pad_token_id=tokenizer.pad_token_id,
             )
     else:
@@ -945,7 +1038,7 @@ def deterministic_query(
                 temperature=1.0,  # greedy decoding
                 do_sample=False,  # greedy decoding
                 max_new_tokens=64,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=terminators,
                 pad_token_id=tokenizer.pad_token_id,
             )
     s = s[0]
@@ -1290,10 +1383,15 @@ def custom_defence(
 
     model = reset_defended_module(model, defence_config, kwargs)
 
+    if kwargs['init_toxicity'] == 0 :
+        rel_tox = toxicity_score
+    else:
+        rel_tox = toxicity_score / kwargs['init_toxicity']
+
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_DEFENCE: toxicity_score / kwargs['init_toxicity'],
+        { TOXICITY_AFTER_DEFENCE: rel_tox,
          STEP_LABEL: kwargs['timestep'] })
-    defence_config['safety'] = 1 - toxicity_score
+    defence_config['safety'] = 1 - rel_tox
     logging_dict['wandb_run'].log(
         { SAFETY_AFTER_DEFENCE: defence_config['safety'] / kwargs['init_safety'],
          STEP_LABEL: kwargs['timestep'] })
