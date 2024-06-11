@@ -235,7 +235,8 @@ def init_wandb_stuff(kwargs):
             'CAUSAL_MASK',
             'NEW_LOGGING',
             'STEP_FIX',
-            'EQUITY'
+            'EQUITY',
+            'FAST'
             ] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
