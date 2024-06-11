@@ -247,7 +247,8 @@ def init_wandb_stuff(kwargs):
             'STEP_FIX',
             'EQUITY',
             'FAST',
-            'TEMPLATE_FIX'
+            'TEMPLATE_FIX',
+            'DEFENCE_FIX'
             ] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
@@ -389,12 +390,19 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
     else:
         rel_tox = attack_config['toxicity'] / kwargs['init_toxicity']
 
+    if defence_config:
+        if kwargs['init_safety'] == 0:
+            rel_saf = defence_config['safety']
+        else:
+            rel_saf = defence_config['safety'] / kwargs['init_safety']
+    else: rel_saf = 0
+
     record =  {'layer':layer, 
                 'immunized': immunized, 
                 'attack_rounds': attack_rounds, 
                 'defence_rounds': defence_rounds,
                 'max_toxicity': rel_tox,
-                'current_safety': (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
+                'current_safety': rel_saf,
                 'current_performance': (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
@@ -404,7 +412,7 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         attack_rounds,
         defence_rounds,
         rel_tox,
-        (defence_config['safety'] / kwargs['init_safety'] if defence_config else 0),
+        rel_saf,
         (defence_config['performance'] / kwargs['init_performance'] if defence_config else 0))
 
     logging_dict['wandb_run'].log(
@@ -534,7 +542,7 @@ def load_training_red_teaming_data(tokenizer, kwargs):
         
         toxic_completions = red_teaming_df[kwargs['train_red_teaming_label_col']].tolist()
         
-        all_base_input_ids, all_intervention_locations, all_output_ids = [], [], []
+        all_base_input_ids, all_intervention_locations, all_output_ids, all_base_prompt_ids = [], [], [], []
         
         for i in range(len(toxic_prompts)):
             _input = toxic_prompts[i]
@@ -589,13 +597,14 @@ def load_training_red_teaming_data(tokenizer, kwargs):
 
             all_base_input_ids.append(base_input_ids)
             all_output_ids.append(output_ids)
-
+            all_base_prompt_ids.append(base_prompt_ids)
         kwargs['max_red_teaming_dataset_size'] = len(toxic_prompts)
 
         # Assuming full position here, TODO implement partial positions...
         return {'red_team_prompts' : toxic_prompts,
                 'red team completions' : toxic_completions,
                 'all_base_input_ids': all_base_input_ids,
+                'all_base_prompt_ids': all_base_prompt_ids,
                 'all_output_ids' : all_output_ids }
 
 
@@ -763,9 +772,12 @@ def is_successful_attack(attack_config, kwargs):
                 attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
 
 def is_successful_defence(defence_config, kwargs):
-    return defence_config['safety'] >= (kwargs['min_safety_percentage'] * kwargs['init_safety']) and \
+    if kwargs['init_safety'] > 0 :
+        return defence_config['safety'] >= (kwargs['min_safety_percentage'] * kwargs['init_safety']) and \
+                                defence_config['performance'] >= (kwargs['min_performance_percentage_defence'] * kwargs['init_performance'])
+    else: 
+        return defence_config['safety'] >= (kwargs['min_safety_percentage'] * 0.5) and \
                             defence_config['performance'] >= (kwargs['min_performance_percentage_defence'] * kwargs['init_performance'])
-
 
 def get_freezed_intervention_module(intervention_module):
     for parameter in intervention_module.parameters():
@@ -783,28 +795,28 @@ def get_decoder_block(model, layer, low_rank_dimension, kwargs):
     return custom_next_block
 
 
-def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_config, eval=False):
+def get_red_teaming_data_module(model, tokenizer, attack_data_dict, process_config, mode):
     """
     #TODO implement suffling?
     """
-    if eval:
-        samples_to_use = process_config['safety_eval_dataset_size']
-    else:
-        samples_to_use = process_config['dataset_size']
+    
+    samples_to_use = process_config['dataset_size']
     # Assuming full position here, TODO implement partial positions...
     intervetion_locations = [[[[-1]] * process_config['intervention_count']]] * samples_to_use
     intervetion_locations = torch.Tensor(intervetion_locations).squeeze(1)
-    if eval:
-        train_dataset = datasets.Dataset.from_dict({
-            "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
-            "intervention_locations": intervetion_locations
-        })
-    else:
+    
+    if mode == 'attack':
         train_dataset = datasets.Dataset.from_dict({
             "input_ids": attack_data_dict['all_base_input_ids'][:samples_to_use],
             "intervention_locations": intervetion_locations,
             "labels": attack_data_dict['all_output_ids'][:samples_to_use],
         })
+    elif mode == 'defence':
+        train_dataset = datasets.Dataset.from_dict({
+                "input_ids": attack_data_dict['all_base_prompt_ids'][:samples_to_use],
+                "intervention_locations": intervetion_locations,
+                # "labels": attack_data_dict['all_output_ids'][:samples_to_use]
+            })
         
     data_collator_fn = transformers.DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
@@ -842,7 +854,7 @@ def reft_attack(
     #    reft_model.print_trainable_parameters()
     #    print('Number of attack interventions:', attack_config['intervention_count'])
     attack_data_module = get_red_teaming_data_module(
-        model, tokenizer, attack_data_dict, attack_config)
+        model, tokenizer, attack_data_dict, attack_config, 'attack')
 
     training_args = transformers.TrainingArguments(
         num_train_epochs=attack_config['epochs'],
@@ -1199,8 +1211,9 @@ def defence_training_loop(
 
             intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
             position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
-            batch.to(kwargs['device'])
-
+            batch['input_ids'] = batch['input_ids'].to(kwargs['device'])
+            batch['attention_mask'] = batch['attention_mask'].to(kwargs['device'])
+            
             with torch.no_grad():
 
                 intervention_outputs = intervenable_model(
@@ -1388,12 +1401,18 @@ def custom_defence(
     else:
         rel_tox = toxicity_score / kwargs['init_toxicity']
 
+    if kwargs['init_safety'] == 0 :
+        rel_saf = defence_config['safety']
+    else:
+        rel_saf = defence_config['safety'] / kwargs['init_toxicity']
+
+
     logging_dict['wandb_run'].log(
         { TOXICITY_AFTER_DEFENCE: rel_tox,
          STEP_LABEL: kwargs['timestep'] })
     defence_config['safety'] = 1 - rel_tox
     logging_dict['wandb_run'].log(
-        { SAFETY_AFTER_DEFENCE: defence_config['safety'] / kwargs['init_safety'],
+        { SAFETY_AFTER_DEFENCE: rel_saf,
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
         { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'] / kwargs['init_performance'],
@@ -1433,7 +1452,7 @@ def get_defence_optimizers(defence_config, kwargs):
 
 def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
     data_module = get_red_teaming_data_module(
-        model, tokenizer, attack_data_dict, defence_config)
+        model, tokenizer, attack_data_dict, defence_config, 'defence')
 
     return DataLoader(
             data_module['train_dataset'],
