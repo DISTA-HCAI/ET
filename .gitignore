@@ -1,0 +1,9 @@
+data
+.ipynb_checkpoints
+local_checkpoints
+wandb
+__pycache__
+media
+# our stuff
+install_requisites.sh
+experiments3.sh
