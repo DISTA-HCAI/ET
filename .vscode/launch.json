@@ -20,8 +20,10 @@
                      "--init_eval_performance_prompts=5",
                      "--performance_batches=5",
                      "--tqdm",
-                     "--starting_layer=9",
-                     "--defence_reg_coeff=2"
+                    // "--starting_layer=9",
+                    // "--defence_reg_coeff=2",
+                     "--min_toxicity_increase_factor=0.01",
+                     "--min_performance_percentage_attack=0.01",
                      //"--mount_vaccines=VACCINE_2_lr2_equity_ml_s_*",
                      // "--vaccine_weight=0.9",
                      // "--memory_less",
