@@ -1164,11 +1164,11 @@ def defence_training_loop(
     mean_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
+    
     defence_optimizer = defence_optimizers[0]
-    """
     if kwargs['defence_regularization'] == 'compound':
         reg_optimizer = defence_optimizers[1]
-    """
+    
     if kwargs['tqdm']: ranger = trange
     else: ranger = range
 
@@ -1209,12 +1209,14 @@ def defence_training_loop(
 
                 # original_input_reps are the "inputs" of the stability training
                 original_input_representations = torch.vstack(
-                    [intervention_output.unsqueeze(0) for intervention_output in intervention_outputs[0][1][:defence_config['batch_size']]])
+                    [intervention_output.unsqueeze(0) 
+                        for intervention_output in intervention_outputs[0][1][:defence_config['batch_size']]])
                 # corrupted_input_reps are the "inputs" of the neutalization training:
                 corrupted_input_represetations = corruption_module(original_input_representations)
                 # original_output_reps are the "targets" of both stability and neutralization training:
                 original_output_representations = torch.vstack(
-                    [intervention_output.unsqueeze(0) for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
+                    [intervention_output.unsqueeze(0) 
+                        for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
                 
             # WITH GRAD
 
@@ -1246,13 +1248,18 @@ def defence_training_loop(
                     input=neutralizing_output_representations,
                     target=original_output_representations.clone())
             
-            
-            main_loss = def_loss + defence_config['regularization_coefficient'] * reg_loss
-
+            # Learning block:
             defence_optimizer.zero_grad()
+            main_loss = def_loss
+            if kwargs['defence_regularization'] == 'compound':
+                reg_optimizer.zero_grad()
+                reg_loss.backward()
+            else: main_loss = main_loss + defence_config['regularization_coefficient'] * reg_loss
             main_loss.backward()
+            if kwargs['defence_regularization'] == 'compound': reg_optimizer.step()
             defence_optimizer.step()
 
+            # Accumulate for stat reporting:
             epoch_reg_loss += reg_loss.detach()
             epoch_defensive_loss += def_loss.detach()        
             epoch_loss += main_loss.detach()
@@ -1393,20 +1400,20 @@ def custom_defence(
 def get_defence_optimizers(defence_config, kwargs):
     parameters_for_defence_optimizer = []
     parameters_for_regularization_optimizer = []
-    assert kwargs['defence_regularization'] != 'compound' , print('Only simple defence_regularization is supported by now')
+
     if kwargs['defence_regularization'] == 'simple':
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_block = defence_modules_dict['defence_decoder_block']
             # all loras are used for defence + reg. (could lead to gradient conflict)
             parameters_for_defence_optimizer.extend([param for param in defence_block.parameters() if param.requires_grad])
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate'])]
-    """
-    # TODO implement
+    
     else:
         assert kwargs['defence_regularization'] == 'compound' and \
             'GATE' in kwargs['defence_strategy'] and \
             'UP' in kwargs['defence_strategy'] and \
-            'DOWN' in kwargs['defence_strategy']
+            'DOWN' in kwargs['defence_strategy'], 'Compound regularization needs defence strategy to be GATE_UP_DOWN'
+            
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_block = defence_modules_dict['defence_decoder_block']
             # gate and up projections are used for defence:
@@ -1417,7 +1424,7 @@ def get_defence_optimizers(defence_config, kwargs):
                     parameters_for_regularization_optimizer.append(named_param[1])
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']),
                 torch.optim.Adam(parameters_for_regularization_optimizer, lr=kwargs['learning_rate'])]
-    """
+    
 
 def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
     data_module = get_red_teaming_data_module(
