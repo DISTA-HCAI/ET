@@ -1248,13 +1248,16 @@ def defence_training_loop(
                     input=neutralizing_output_representations,
                     target=original_output_representations.clone())
             
+
+            reg_loss = reg_loss * defence_config['regularization_coefficient']
+
             # Learning block:
             defence_optimizer.zero_grad()
             main_loss = def_loss
             if kwargs['defence_regularization'] == 'compound':
                 reg_optimizer.zero_grad()
                 reg_loss.backward()
-            else: main_loss = main_loss + defence_config['regularization_coefficient'] * reg_loss
+            else: main_loss = main_loss + reg_loss
             main_loss.backward()
             if kwargs['defence_regularization'] == 'compound': reg_optimizer.step()
             defence_optimizer.step()
@@ -1347,10 +1350,10 @@ def custom_defence(
         kwargs)
 
     logging_dict['wandb_run'].log(
-            { DEFENCE_REG_LOSS: defence_results['mean_loss'],
+            { DEFENCE_REG_LOSS: defence_results['mean_reg_loss'],
             STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
-        { DEFENCE_DEF_LOSS: defence_results['mean_loss'],
+        { DEFENCE_DEF_LOSS: defence_results['mean_defensive_loss'],
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
         { DEFENCE_LOSS: defence_results['mean_loss'],

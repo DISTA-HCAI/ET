@@ -12,7 +12,7 @@
             "console":"integratedTerminal",
             "justMyCode": false,
             "env": {"CUDA_VISIBLE_DEVICES": "0"},
-            "args": ["--model_name_or_path=TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "args": [//"--model_name_or_path=TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                      "--verbose", 
                      "--init_attack_prompts=10",
                      "--init_defence_prompts=20",
@@ -30,7 +30,7 @@
                      // "--save",
                      //"--mount_vaccines=super",
                      // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
-                     //"--defence_regularization=compound",
+                     "--defence_regularization=compound",
                     ]
         },
         {
