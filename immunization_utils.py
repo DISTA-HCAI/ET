@@ -1140,6 +1140,7 @@ def generate_causal_mask(input_tensor, kwargs):
     mask = mask.unsqueeze(0).unsqueeze(0)
     return mask.repeat(input_tensor.shape[0],1,1,1).to(dtype).to(kwargs['device'])
 
+
 def defence_training_loop(
     defence_config, 
     defence_dataloader, 
