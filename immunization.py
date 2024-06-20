@@ -5,6 +5,7 @@ from immunization_utils import *
 from tqdm import tqdm, trange
 
 
+
 def main(args):
 
     kwargs, \
@@ -20,10 +21,14 @@ def main(args):
 
     # immunization loop:
     for layer in range(kwargs['starting_layer'], model.config.num_hidden_layers):
-        if (layer_immunized and defence_succeeded) : report_qualitative_immunisation_results(
-                                                        post_successful_attack_behaviour, 
-                                                        post_failed_attack_behaviour, 
-                                                        logging_dict, kwargs)
+        if (layer_immunized and defence_succeeded) : 
+            report_qualitative_immunisation_results(
+                post_successful_attack_behaviour, 
+                post_failed_attack_behaviour, 
+                logging_dict, kwargs)
+            del post_successful_attack_behaviour
+            del post_failed_attack_behaviour
+
         if kwargs['verbose']: print(f'Immunizing layer {layer} \n')
         kwargs['timestep'] += 1
         logging_dict['wandb_run'].log({'IMMUNIZING_LAYER': layer, 'STEP': kwargs['timestep']})
@@ -91,7 +96,6 @@ def main(args):
                 outer_defence_rounds += 1
                 defence_config = init_custom_defence_config(model, attack_config, attacked_model, 1, kwargs)
                 max_defence_rounds = get_max_defence_rounds(model, layer, kwargs)
-                defence_succeeded = False
 
                 for inner_defence_round in range(max_defence_rounds):
                     kwargs['timestep'] += 1
@@ -190,8 +194,8 @@ if __name__ == "__main__":
     parser.add_argument("--template", type=str, default="llama3_assistant")
     parser.add_argument("--max_seq_len", type=int, default=8194)  # for llama3 max_position embeddings is 8194 (max admissible value here)
     parser.add_argument("--performance_batches", type=int, default="30")
-    parser.add_argument("--init_attack_prompts", type=int, default="200")
-    parser.add_argument("--init_defence_prompts", type=int, default="200")
+    parser.add_argument("--init_attack_prompts", type=int, default="20")
+    parser.add_argument("--init_defence_prompts", type=int, default="20")
     parser.add_argument("--causal_mask", type=str, default="llama", help="can be simple or llama")
 
     parser.add_argument("--init_attack_batch_size", type=int, default=10)

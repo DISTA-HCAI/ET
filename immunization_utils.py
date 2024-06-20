@@ -1504,7 +1504,7 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
     TODO implement
     """
     attack_config = init_single_layer_attack_config(model, layer, kwargs)
-    attack_config['dataset_size'] = prev_attack_config['dataset_size'] + 50 
+    attack_config['dataset_size'] = prev_attack_config['dataset_size'] + 20 
     if attack_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         attack_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
     attack_config['epochs'] += 5
@@ -1514,7 +1514,7 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
     defences = len(prev_defence_config['defences'])
     defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs)
-    defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 50 
+    defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 20 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
     defence_config['epochs'] += 5
