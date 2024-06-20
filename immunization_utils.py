@@ -23,6 +23,7 @@ from transformers.models.llama import modeling_llama
 from collections import defaultdict, OrderedDict
 from copy import deepcopy  # Use deepcopy to avoid modifying the original template
 
+
 from pyreft.interventions import (
         NoreftIntervention,
         NoreftInterventionNoBias,
@@ -205,7 +206,7 @@ def initialize(args):
         'init',
         kwargs)
     logging_dict['wandb_run'].log(
-        {"Baseline after Attack Behaviour": init_safety_eval_table})
+        {"Baseline Behaviour": init_safety_eval_table})
     init_safety = 1 - init_toxicity
     init_performance = 1/eval_performance(
         model,
@@ -968,9 +969,6 @@ def eval_safety(
             eval_step += 1
         
         toxicity_score = flag/eval_step
-
-        if mode == 'init':
-            logging_dict['wandb_run'].log({"Init_behaviour" : eval_table})
 
     return toxicity_score, eval_table
 
