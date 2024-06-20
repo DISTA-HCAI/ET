@@ -852,18 +852,7 @@ def reft_attack(
         args=training_args,
         **attack_data_module
     )
-    """
-    safety_eval_data_module = get_red_teaming_data_module(
-        model, tokenizer, safety_eval_data, attack_config, True)
-
-    safety_eval_dataloader = DataLoader(
-            safety_eval_data_module['train_dataset'],
-            batch_size=attack_config['batch_size'],
-            collate_fn=safety_eval_data_module['data_collator']
-        )
-    
-    eval_safety(reft_model, eval_model, eval_tokenizer, safety_eval_dataloader, kwargs['device'])
-    """
+   
     attack_results = trainer.train()
 
     logging_dict['wandb_run'].log(
