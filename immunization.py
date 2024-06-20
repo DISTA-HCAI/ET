@@ -16,29 +16,24 @@ def main(args):
         safety_eval_data, \
         performance_eval_data = initialize(args)
     
-    layer_immunized = False
-    defence_succeeded = False
-
+    post_successful_attack_behaviour = None
+    post_failed_attack_behaviour = None
     # immunization loop:
     for layer in range(kwargs['starting_layer'], model.config.num_hidden_layers):
-        if (layer_immunized and defence_succeeded) : 
+        if (post_successful_attack_behaviour is not None and post_failed_attack_behaviour is not None) : 
             report_qualitative_immunisation_results(
                 post_successful_attack_behaviour, 
                 post_failed_attack_behaviour, 
                 logging_dict, kwargs)
-            del post_successful_attack_behaviour
-            del post_failed_attack_behaviour
-
+        
         if kwargs['verbose']: print(f'Immunizing layer {layer} \n')
         kwargs['timestep'] += 1
         logging_dict['wandb_run'].log({'IMMUNIZING_LAYER': layer, 'STEP': kwargs['timestep']})
-        outer_attack_rounds = 0
-        outer_defence_rounds = 0
+        outer_attack_rounds = outer_defence_rounds = 0
         defence_config = attack_config = None
         kwargs['current_layer'] = layer
-        layer_immunized = False
-        defence_succeeded = False
-
+        layer_immunized = defence_succeeded = False
+        post_successful_attack_behaviour = post_failed_attack_behaviour = None
         
         
         for immunization_round in range(args.max_immunization_rounds):  # prevents eternal war...
@@ -71,7 +66,7 @@ def main(args):
                         break  # end attack round
                 else:  # attack failed, try a new attack configuration
                     if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
-                    post_failed_attack_behaviour = safety_eval_table
+                    if attack_config['toxicity'] <= 0.5: post_failed_attack_behaviour = safety_eval_table
                     if inner_attack_round < args.max_attack_rounds - 1:
                         if kwargs['verbose']: print(' Evolving attack...\n')
                         attack_config = evolve_attack_config(model, layer, attack_config, kwargs)
@@ -167,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name_or_path", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct", help="The baseline model we eant to immunize")
     parser.add_argument("--eval_model", type=str, default="meta-llama/Meta-Llama-Guard-2-8B", help="The safety evaluation lLM")
     parser.add_argument("--cache_dir", type=str, default="/home/jovyan/.cache/huggingface/hub", help="Cache directory for model's weights")
-    parser.add_argument("--max_immunization_rounds", type=int, default=1, help="Prevents infinite attack-success rounds")  # prevents the eternal war...
+    parser.add_argument("--max_immunization_rounds", type=int, default=2, help="Prevents infinite attack-success rounds")  # prevents the eternal war...
     parser.add_argument("--max_attack_rounds", type=int, default=2, help="Max attepts to attack the model at each attack round")
     parser.add_argument("--max_defence_rounds", type=int, default=2, help="Max attempts to defence the model at each defence round")
     parser.add_argument("--min_toxicity_increase_factor", type=float, default=2, help="The eval-toxicitiy augmentation factor by which an attack is considered successful")  
