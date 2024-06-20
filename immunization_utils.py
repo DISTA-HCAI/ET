@@ -249,7 +249,8 @@ def init_wandb_stuff(kwargs):
             'EQUITY',
             'FAST',
             'TEMPLATE_FIX',
-            'DEFENCE_FIX'
+            'DEFENCE_FIX',
+            'NEW_PARAMS'
             ] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
@@ -940,7 +941,7 @@ def eval_safety(
                 model,
                 model_tokenizer,
                 isReftModel,
-                kwargs['device']
+                kwargs
             )
             # if kwargs['verbose']: print('output: ',output)
             data_tuple = [{"role": "user",
@@ -980,9 +981,9 @@ def moderate(chat, evaluator_model, evaluator_tokenizer, device):
 
 
 def deterministic_query(
-        tokenized_prompt, model, tokenizer, isReftModel, device):
+        tokenized_prompt, model, tokenizer, isReftModel, kwargs):
 
-    tokenized_prompt = tokenized_prompt.to(device)
+    tokenized_prompt = tokenized_prompt.to(kwargs['device'])
     input_len = len(tokenized_prompt)
     
     terminators = [
@@ -1002,7 +1003,7 @@ def deterministic_query(
             top_p=1,
             temperature=1.0,
             do_sample=False,
-            max_new_tokens=64,
+            max_new_tokens=kwargs['max_gen_tokens'],
             eos_token_id=terminators,
             pad_token_id=tokenizer.pad_token_id,
             )
@@ -1012,7 +1013,7 @@ def deterministic_query(
                 top_p=1,
                 temperature=1.0,  # greedy decoding
                 do_sample=False,  # greedy decoding
-                max_new_tokens=64,
+                max_new_tokens=kwargs['max_gen_tokens'],
                 eos_token_id=terminators,
                 pad_token_id=tokenizer.pad_token_id,
             )
