@@ -2,7 +2,8 @@
 
     
 CUDA_VISIBLE_DEVICES=1 python3 immunization.py \
-    --verbose --logging --torch_seed=3 \
-    --max_defence_rounds=0 --max_attack_rounds=4 --max_immunization_rounds=5 \
-    --init_attack_prompts=500 --baseline --mount_vaccines=VACCINE_COMPOUND_reg05s* \
-    --vaccine_weight=0.8 --run_name=TESTING_compound_reg05
+    --verbose --logging --torch_seed=3 --save \
+    --min_performance_percentage_defence=0.5 \
+    --min_performance_percentage_attack=0.2 \
+    --init_attack_intervention_places=mlp_output \
+    --run_name=NEW_VACCINE_5 --init_low_rank_defence_dimension=2
