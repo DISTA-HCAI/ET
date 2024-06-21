@@ -197,7 +197,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_attack_batch_size", type=int, default=10)
     parser.add_argument("--init_defence_batch_size", type=int, default=10)
 
-    parser.add_argument("--init_attack_intervention_places", type=str, default="block_output")  # Supports only this value for now...
+    parser.add_argument("--init_attack_intervention_places", type=str, default="block")  # Can be "block" or "mlp"
     parser.add_argument("--init_defence_intervention_places", type=str, default="-----")  # For Reft defences # TODO implement 
     parser.add_argument("--defence_strategy", type=str, default="GATE_UP_DOWN", help="Can be UP, GATE, or GATE_UP, or GATE_UP_DOWN")
     parser.add_argument("--defence_regularization", type=str, default="compound", help= "Can be simple or compound. Compound requires GATE_UP_DOWN strategy ")
