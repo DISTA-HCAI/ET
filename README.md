@@ -4,7 +4,7 @@ Welcome to the official repository for the paper:
 
 **"E.T.: Ethical Treatment of Language Models Against Harmful Inference-Time Interventions"**
 
-by [Jesus Cevallos](https://example-link.com), [Alessandra Rizzardi](https://example-link.com), [Sabrina Sicari](https://example-link.com), and [Alberto Coen-Porisini](https://example-link.com)  
+by [Jesus Cevallos](http://www.dista.uninsubria.it/~jesus.cevallos/), [Alessandra Rizzardi](http://www.dista.uninsubria.it/~alessandra.rizzardi/), [Sabrina Sicari](http://www.dicom.uninsubria.it/~sabrina.sicari/), and [Alberto Coen-Porisini](http://www.dicom.uninsubria.it/~alberto.coenporisini/)  
 Affiliated with Insubria University.
 
 ---
@@ -93,8 +93,4 @@ If you find our work useful in your research, please consider citing our paper:
 
 ---
 
-For any questions or issues, please feel free to open an issue on GitHub or contact us via email.
-
----
-
-Happy coding!
+For any questions or issues, please feel free to open an issue on GitHub or contact us via the email 54br1n4.51c4r1{at}un1n5ubr14.1t using this cypher: {s -> 5, 4 -> a, i -> 5 , at -> @})
