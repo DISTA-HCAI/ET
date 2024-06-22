@@ -648,7 +648,16 @@ def init_single_layer_attack_config(model, layer, kwargs):
 
     representations = []
 
-    intervention_place = kwargs['init_attack_intervention_places'] + '_input'
+    if kwargs['init_attack_intervention_places'] == 'mlp':
+        intervention_place = kwargs['init_attack_intervention_places'] + '_input'
+    elif kwargs['init_attack_intervention_places'] == 'block':
+        """
+        We should put the intervention here in the block's input, but it turns 
+        out that if we do that we interveene after the residual connection and that thing 
+        turns out to be difficult to immunise. So we assume for now attacks before the residual 
+        connection ( after the mlp output)
+        """
+        intervention_place = 'mlp_output' 
 
     embed_dim = model.config.hidden_size
 
@@ -702,12 +711,12 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
 
     for defence_idx in range(defences):
         if kwargs['init_attack_intervention_places'] == 'mlp':
-            assert defences == 1, "MLP defences must be local!!!"
+            assert defences == 1, "MLP defences must be local!!!" # means, no multiblock defences allowed
+            curr_defence_layer = intervention_layer + defence_idx  # this defences can be implemented at the same block
         else:
             assert kwargs['init_attack_intervention_places'] == 'block', \
                 "Fatal error: init_attack_intervention_places must be either \"block\" or \"mlp\"!!!"
-        
-        curr_defence_layer = intervention_layer + defence_idx
+            curr_defence_layer = intervention_layer + defence_idx + 1 # this defences are done in the next block
         
         defensive_module = get_defensive_module(
             model, 
