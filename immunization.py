@@ -174,6 +174,7 @@ if __name__ == "__main__":
     parser.add_argument('--baseline', action='store_true', help='resistance test of model (keeps performing attacks even if these are successful, to exctract ASR)')
     parser.add_argument('--save', action='store_true', help='save model after absortion')
     parser.add_argument('--memory_less', action='store_true', help='do not absorb defences')
+    parser.add_argument("--multiblock_defences", action='store_true', help='in case local defence fails, spread defence over more blocks')
 
     parser.add_argument('--run_name', type=str, default='new_run')
     parser.add_argument('--tags', type=str, default='IMMUNIZATION', help='wandb run tags')

@@ -1646,8 +1646,16 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
 
 
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
-    defences = len(prev_defence_config['defences'])
-    defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs)
+    num_of_defences = len(prev_defence_config['defences'])
+
+    if kwargs['multiblock_defences']: 
+        intervention_key, intervention_module = list(attacked_model.interventions.items())[0]
+        intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
+        total_layers = len(attacked_model.model.model.layers)
+        remaining_layers = total_layers - intervention_layer
+        num_of_defences = min( num_of_defences +1 , remaining_layers )
+
+    defence_config = init_custom_defence_config(model, attack_config, attacked_model, num_of_defences, kwargs)
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 20 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
