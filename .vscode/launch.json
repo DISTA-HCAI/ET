@@ -11,7 +11,7 @@
             "program":"immunization.py",
             "console":"integratedTerminal",
             "justMyCode": false,
-            "env": {"CUDA_VISIBLE_DEVICES": "10"},
+            "env": {"CUDA_VISIBLE_DEVICES": "0"},
             "args": ["--model_name_or_path=TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                      "--verbose", 
                      "--init_attack_prompts=10",
