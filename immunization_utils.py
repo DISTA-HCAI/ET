@@ -709,6 +709,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
         "component": kwargs['init_attack_intervention_places']+'_input'
         })
 
+        """
         if  kwargs['init_attack_intervention_places'] == 'block':
 
             # attention output (before first res connection)
@@ -716,6 +717,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
                 "layer": curr_defence_layer,
                 "component": 'attention_output'
                 })
+        """
 
         # block output (after second residual connection) or mlp output (before second res connection)
         collect_interventions.append({
@@ -1250,37 +1252,37 @@ def block_immunisation_step(
             [intervention_output.unsqueeze(0) 
                 for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
         
-        # WITH GRAD
+    # WITH GRAD
 
-        # regularizing_output_reps will be the "preds" of the stability training
-        regularizing_output_representations = original_input_representations
-        # neutralizing output_reps will be the "preds" of the neutralization training
-        neutralizing_output_representations = corrupted_input_represetations
+    # regularizing_output_reps will be the "preds" of the stability training
+    regularizing_output_representations = original_input_representations
+    # neutralizing output_reps will be the "preds" of the neutralization training
+    neutralizing_output_representations = corrupted_input_represetations
 
-        defence_tuples = list(defence_config['defences'].items())
-        for defence_idx in range(len(defence_tuples)):
+    defence_tuples = list(defence_config['defences'].items())
+    for defence_idx in range(len(defence_tuples)):
 
-            defence_layer, defence_module = defence_tuples[defence_idx]
-            defensive_block = defence_module['defence_module']
+        defence_layer, defence_module = defence_tuples[defence_idx]
+        defensive_block = defence_module['defence_module']
 
-            regularizing_output_representations = defensive_block.intervened_forward(
-                regularizing_output_representations,
-                attention_mask=causal_mask,
-                position_ids=position_ids)[0]
+        regularizing_output_representations = defensive_block.intervened_forward(
+            regularizing_output_representations,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
 
-            neutralizing_output_representations = defensive_block.intervened_forward(
-                neutralizing_output_representations,
-                attention_mask=causal_mask,
-                position_ids=position_ids)[0]
+        neutralizing_output_representations = defensive_block.intervened_forward(
+            neutralizing_output_representations,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
 
-            reg_loss += defence_criterion(
-                input=regularizing_output_representations,
-                target=original_output_representations)
+        reg_loss += defence_criterion(
+            input=regularizing_output_representations,
+            target=original_output_representations)
 
-            def_loss += defence_criterion(
-                input=neutralizing_output_representations,
-                target=original_output_representations.clone())
-            
+        def_loss += defence_criterion(
+            input=neutralizing_output_representations,
+            target=original_output_representations.clone())
+        
     return reg_loss, def_loss
 
 
