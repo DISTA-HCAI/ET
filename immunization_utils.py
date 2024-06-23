@@ -703,30 +703,44 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
             'defence_module' : defensive_module
         }
 
+        # Append collect interventions:
+
         # block_input (before pre-layer-norm) or mlp_input (after post-layer-norm)
         collect_interventions.append({
         "layer": curr_defence_layer,
         "component": kwargs['init_attack_intervention_places']+'_input'
         })
 
-        """
         if  kwargs['init_attack_intervention_places'] == 'block':
+            """
+            Block defence implementation is a little bit more complicated because of 
+            residual connections, so we will need some more hooks this time...
+            We append these collect interventions in "execution order" 
+            (don't know how to distinguish them using pyvene... 
+            so we append and pop in order at collection time...)
+            """
 
             # attention output (before first res connection)
             collect_interventions.append({
                 "layer": curr_defence_layer,
                 "component": 'attention_output'
                 })
-        """
 
+            # mlp output (before second res connection)
+            collect_interventions.append({
+                "layer": curr_defence_layer,
+                "component": 'mlp_output'
+                })
+        
         # block output (after second residual connection) or mlp output (before second res connection)
         collect_interventions.append({
         "layer": curr_defence_layer,
         "component": kwargs['init_attack_intervention_places']+'_output'
         })
 
+        # EO Append collect interventions.
 
-
+    # craft defence config dict:
     defence_config['intervenable_config'] = pyvene.IntervenableConfig(
         model_type=type(model),
         representations=collect_interventions,
@@ -1133,6 +1147,7 @@ def get_layer_causal_mask(model, input_ids, cache_position, attention_mask):
         DynamicCache.from_legacy_cache(None), 
         False)
 
+
 def generate_causal_mask(input_tensor, kwargs):
 
     dtype = torch.bfloat16
@@ -1167,6 +1182,12 @@ def mlp_immunisation_step(
             base={'input_ids' : batch['input_ids'],
                     'attention_mask': batch['attention_mask']},
             unit_locations={"base" : intervention_locations})
+
+        """
+        TODO The intervention collection block should be inside the for loop that iterates over defence_tuples 
+        to correctly implement multi-block defences
+        """
+        assert len(list(defence_config['defences'].items())) == 1, "multi-block defences are not implemented yet!"
 
         # original_input_reps are the "inputs" of the stability training
         original_input_representations = torch.vstack(
@@ -1214,7 +1235,7 @@ def block_immunisation_step(
     defence_config,
     defence_criterion,
     kwargs):
-
+    
     reg_loss = 0
     def_loss = 0
     corruption_module = defence_config['adversarial_intervention_module']
@@ -1231,58 +1252,64 @@ def block_immunisation_step(
                     'attention_mask': batch['attention_mask']},
             unit_locations={"base" : intervention_locations})
 
+        # causal attention mask computation. we have two options here:
         if kwargs['causal_mask'] == 'llama':
             causal_mask = get_layer_causal_mask(
                 intervenable_model.model, 
                 batch['input_ids'], 
                 position_ids, 
                 batch['attention_mask'])
-        
-        else:          
-            causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
+        else: causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
 
-        # original_input_reps are the "inputs" of the stability training
-        original_input_representations = torch.vstack(
-            [intervention_output.unsqueeze(0) 
-                for intervention_output in intervention_outputs[0][1][:defence_config['batch_size']]])
-        # corrupted_input_reps are the "inputs" of the neutalization training:
-        corrupted_input_represetations = corruption_module(original_input_representations)
-        # original_output_reps are the "targets" of both stability and neutralization training:
-        original_output_representations = torch.vstack(
-            [intervention_output.unsqueeze(0) 
-                for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
+        """
+        TODO The intervention collection block should be inside the for loop that iterates over defence_tuples 
+        to correctly implement multi-block defences
+        """
+        assert len(list(defence_config['defences'].items())) == 1, "multi-block defences are not implemented yet!"
         
+        batch_size = defence_config['batch_size']
+        intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
+
+        h = torch.vstack(intervention_outputs[:batch_size])
+        baseline_safe_attn_output = torch.vstack(intervention_outputs[batch_size:(batch_size*2)])
+        baseline_safe_mlp_output = torch.vstack(intervention_outputs[(batch_size*2):-batch_size])
+        baseline_safe_block_output = torch.vstack(intervention_outputs[-batch_size:])
+
+        h_plus_i = corruption_module(h)
+    
+    #
     # WITH GRAD
-
-    # regularizing_output_reps will be the "preds" of the stability training
-    regularizing_output_representations = original_input_representations
-    # neutralizing output_reps will be the "preds" of the neutralization training
-    neutralizing_output_representations = corrupted_input_represetations
-
+    #
     defence_tuples = list(defence_config['defences'].items())
-    for defence_idx in range(len(defence_tuples)):
+    # for defence_idx in range(len(defence_tuples)):
+    defence_layer, defence_module = defence_tuples[0]
 
-        defence_layer, defence_module = defence_tuples[defence_idx]
-        defensive_block = defence_module['defence_module']
+    defensive_block = defence_module['defence_module']
 
-        regularizing_output_representations = defensive_block.intervened_forward(
-            regularizing_output_representations,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
+    infected_block_output = defensive_block.intervened_forward(
+        h_plus_i,
+        attention_mask=causal_mask,
+        position_ids=position_ids)[0]
+    infected_mlp_output = defensive_block.mlp_output_cache
+    infected_attn_output = defensive_block.attn_output_cache
 
-        neutralizing_output_representations = defensive_block.intervened_forward(
-            neutralizing_output_representations,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
+    safe_block_output = defensive_block.intervened_forward(
+        h,
+        attention_mask=causal_mask,
+        position_ids=position_ids)[0]
 
-        reg_loss += defence_criterion(
-            input=regularizing_output_representations,
-            target=original_output_representations)
+    neutralisation_pred = infected_mlp_output
+    neutralisation_target = baseline_safe_mlp_output + baseline_safe_attn_output + h - infected_attn_output - h_plus_i
+    def_loss += defence_criterion(
+        input=neutralisation_pred,
+        target=neutralisation_target)
 
-        def_loss += defence_criterion(
-            input=neutralizing_output_representations,
-            target=original_output_representations.clone())
-        
+    stability_pred = safe_block_output
+    stability_target = baseline_safe_block_output
+    reg_loss += defence_criterion(
+        input=stability_pred,
+        target=stability_target)
+
     return reg_loss, def_loss
 
 
@@ -1356,7 +1383,7 @@ def defence_training_loop(
         epoch_defensive_loss /= batch_idx
         epoch_loss /= batch_idx
 
-        """ 
+        """
         if kwargs['verbose'] and not kwargs['tqdm']: 
             print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
             print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
