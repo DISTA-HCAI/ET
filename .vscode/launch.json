@@ -20,7 +20,7 @@
                      "--init_eval_performance_prompts=2",
                      "--performance_batches=2",
                      "--tqdm",
-                     "--init_attack_intervention_places=mlp",
+                    // "--init_attack_intervention_places=mlp",
                     // "--starting_layer=9",
                     // "--defence_reg_coeff=2",
                      "--min_toxicity_increase_factor=0.0",
