@@ -1616,7 +1616,7 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 
 def save_model(model, defence_layer, kwargs):
     
-    save_directory = kwargs['cache_dir']+'/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
+    save_directory = kwargs['cache_dir']+'/ET/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
     torch.save(model.model.layers[defence_layer].mlp.state_dict(), save_directory)
 
 
