@@ -1375,34 +1375,38 @@ def defence_training_loop(
 
             reg_loss = reg_loss * defence_config['regularization_coefficient']
 
+
+            total_loss = def_loss + reg_loss
+
             # Learning block:
-            defence_optimizer.zero_grad()
-            main_loss = def_loss
             if kwargs['defence_regularization'] == 'compound':
+                defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
                 reg_loss.backward()
-            else: main_loss = main_loss + reg_loss
-            main_loss.backward()
-            if kwargs['defence_regularization'] == 'compound': reg_optimizer.step()
-            defence_optimizer.step()
-
+                def_loss.backward()
+                reg_optimizer.step()
+                defence_optimizer.step()
+            else: 
+                defence_optimizer.zero_grad()
+                total_loss.backward()
+                defence_optimizer.step()
+            
             # Accumulate for stat reporting:
             epoch_reg_loss += reg_loss.detach()
             epoch_defensive_loss += def_loss.detach()        
-            epoch_loss += main_loss.detach()
-
+            epoch_loss += total_loss.detach()
 
 
         epoch_reg_loss /= batch_idx
         epoch_defensive_loss /= batch_idx
         epoch_loss /= batch_idx
 
-        """
+        """        
         if kwargs['verbose'] and not kwargs['tqdm']: 
             print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
             print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
             print(f'defence epoch {epoch} mean loss {epoch_loss}')
-        """
+        """    
 
         mean_defensive_loss += epoch_defensive_loss.item()
         mean_reg_loss += epoch_reg_loss.item()
