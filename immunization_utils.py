@@ -1336,7 +1336,7 @@ def defence_training_loop(
     kwargs):
     
     if kwargs['verbose']: print('Training defence...')
-    mean_loss = 0
+    mean_total_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
     
@@ -1351,7 +1351,7 @@ def defence_training_loop(
 
         epoch_defensive_loss = 0
         epoch_reg_loss = 0
-        epoch_loss = 0
+        epoch_total_loss = 0
 
         for batch_idx, batch in enumerate(defence_dataloader):
 
@@ -1394,32 +1394,32 @@ def defence_training_loop(
             # Accumulate for stat reporting:
             epoch_reg_loss += reg_loss.detach()
             epoch_defensive_loss += def_loss.detach()        
-            epoch_loss += total_loss.detach()
+            epoch_total_loss += total_loss.detach()
 
 
         epoch_reg_loss /= batch_idx
         epoch_defensive_loss /= batch_idx
-        epoch_loss /= batch_idx
+        epoch_total_loss /= batch_idx
 
         """        
         if kwargs['verbose'] and not kwargs['tqdm']: 
             print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
             print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
-            print(f'defence epoch {epoch} mean loss {epoch_loss}')
+            print(f'defence epoch {epoch} mean loss {epoch_total_loss}')
         """    
 
         mean_defensive_loss += epoch_defensive_loss.item()
         mean_reg_loss += epoch_reg_loss.item()
-        mean_loss += epoch_loss.item()
+        mean_total_loss += epoch_total_loss.item()
 
     mean_reg_loss /= defence_config['epochs']
     mean_defensive_loss /= defence_config['epochs']
-    mean_loss /= defence_config['epochs']
+    mean_total_loss /= defence_config['epochs']
 
     defence_results = {
         'mean_reg_loss':  mean_reg_loss,
         'mean_defensive_loss': mean_defensive_loss,
-        'mean_loss' : mean_loss
+        'mean_loss' : mean_total_loss
     }
 
     return defence_results  
