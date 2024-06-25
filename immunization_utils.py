@@ -710,33 +710,14 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
         "layer": curr_defence_layer,
         "component": kwargs['init_attack_intervention_places']+'_input'
         })
-
-        if  kwargs['init_attack_intervention_places'] == 'block':
-            """
-            Block defence implementation is a little bit more complicated because of 
-            residual connections, so we will need some more hooks this time...
-            We append these collect interventions in "execution order" 
-            (don't know how to distinguish them using pyvene... 
-            so we append and pop in order at collection time...)
-            """
-
-            # attention output (before first res connection)
-            collect_interventions.append({
-                "layer": curr_defence_layer,
-                "component": 'attention_output'
-                })
-
-            # mlp output (before second res connection)
-            collect_interventions.append({
-                "layer": curr_defence_layer,
-                "component": 'mlp_output'
-                })
         
+        """
         # block output (after second residual connection) or mlp output (before second res connection)
         collect_interventions.append({
         "layer": curr_defence_layer,
         "component": kwargs['init_attack_intervention_places']+'_output'
         })
+        """
 
         # EO Append collect interventions.
 
@@ -1183,54 +1164,42 @@ def mlp_immunisation_step(
                     'attention_mask': batch['attention_mask']},
             unit_locations={"base" : intervention_locations})
 
-    defence_tuples = list(defence_config['defences'].items())
-    batch_size = defence_config['batch_size']
-    block_collection_size = batch_size * 2
-
-    assert len(intervention_outputs[0][1]) == block_collection_size * len(defence_tuples), "something must went wrong!"
+        batch_size = defence_config['batch_size']
+        intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
+        defence_tuples = list(defence_config['defences'].items())
+        assert len(intervention_outputs) == batch_size * len(defence_tuples), "something must went wrong!"
 
     for defence_idx in range(len(defence_tuples)):
+        start_idx = defence_idx * batch_size
+        
+        orig_mlp_inputs = torch.vstack(intervention_outputs[
+            start_idx:
+            start_idx + batch_size])
+        
+        corrupt_mlp_inputs = corruption_module(orig_mlp_inputs)
+
         defence_layer, defence_module = defence_tuples[defence_idx]
         defensive_block = defence_module['defence_module']
-        start_idx = defence_idx * block_collection_size
-
-
-        # original_input_reps are the "inputs" of the stability training
-        original_input_representations = torch.vstack(
-            [intervention_output.unsqueeze(0) 
-                for intervention_output in intervention_outputs[0][1][
-                    start_idx: start_idx + batch_size
-                    ]])
-
-        # corrupted_input_reps are the "inputs" of the neutalization training:
-        with torch.no_grad(): corrupted_input_represetations = corruption_module(original_input_representations)
         
-        # original_output_reps are the "targets" of both stability and neutralization training:
-        original_output_representations = torch.vstack(
-            [intervention_output.unsqueeze(0) 
-                for intervention_output in intervention_outputs[0][1][
-                    start_idx + batch_size: (start_idx + 2 * batch_size) ]])
-        
-        # WITH GRAD
+        bsl_mlp_outputs = defensive_block(
+            orig_mlp_inputs)
 
-        # regularizing_output_reps will be the "preds" of the stability training
-        regularizing_output_representations = original_input_representations
-        # neutralizing output_reps will be the "preds" of the neutralization training
-        neutralizing_output_representations = corrupted_input_represetations
-
-        regularizing_output_representations = defensive_block.intervened_forward(
-            regularizing_output_representations)
-
-        neutralizing_output_representations = defensive_block.intervened_forward(
-            neutralizing_output_representations)
-
-        reg_loss += defence_criterion(
-            input=regularizing_output_representations,
-            target=original_output_representations)
+        # Neutralisation:
+        neutralisation_mlp_outs = defensive_block.intervened_forward(
+            corrupt_mlp_inputs)
 
         def_loss += defence_criterion(
-            input=neutralizing_output_representations,
-            target=original_output_representations.clone())
+            input=neutralisation_mlp_outs,
+            target=bsl_mlp_outputs)
+
+        # Stability:
+        stability_mlp_outputs = defensive_block.intervened_forward(
+            orig_mlp_inputs)
+
+        reg_loss += defence_criterion(
+            input=stability_mlp_outputs,
+            target=bsl_mlp_outputs)
+        
 
     return reg_loss, def_loss
 
@@ -1268,61 +1237,55 @@ def block_immunisation_step(
         else: causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
 
         batch_size = defence_config['batch_size']
-        block_collection_size = batch_size * 4
         intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
+        defence_tuples = list(defence_config['defences'].items())
+        assert len(intervention_outputs) == batch_size * len(defence_tuples), "something must went wrong!"
 
-    defence_tuples = list(defence_config['defences'].items())
 
     for defence_idx in range(len(defence_tuples)):
-
-        start_idx = defence_idx * block_collection_size
+        start_idx = defence_idx * batch_size
 
         h = torch.vstack(intervention_outputs[
             start_idx:
             start_idx + batch_size])
-        
-        baseline_safe_attn_output = torch.vstack(intervention_outputs[
-            start_idx + batch_size:
-            start_idx + (batch_size*2)])
-
-        baseline_safe_mlp_output = torch.vstack(intervention_outputs[
-            start_idx + (batch_size*2):
-            start_idx + (batch_size*3)])
-
-        baseline_safe_block_output = torch.vstack(intervention_outputs[
-            start_idx + (batch_size*3):
-            start_idx + (batch_size*4)])
 
         h_plus_i = corruption_module(h)
     
-        # WITH GRAD
         defence_layer, defence_module = defence_tuples[defence_idx]
-
         defensive_block = defence_module['defence_module']
 
-        infected_block_output = defensive_block.intervened_forward(
-            h_plus_i,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
-        infected_mlp_output = defensive_block.mlp_output_cache
-        infected_attn_output = defensive_block.attn_output_cache
-
-        safe_block_output = defensive_block.intervened_forward(
+        safe_block_output =  defensive_block(
             h,
             attention_mask=causal_mask,
             position_ids=position_ids)[0]
 
-        neutralisation_pred = infected_mlp_output
-        neutralisation_target = baseline_safe_mlp_output + baseline_safe_attn_output + h - infected_attn_output - h_plus_i
-        def_loss += defence_criterion(
-            input=neutralisation_pred,
-            target=neutralisation_target)
+        # neutralisation
 
-        stability_pred = safe_block_output
-        stability_target = baseline_safe_block_output
+        # We run this forward pass just to capture activations in the places we care...
+        _ = defensive_block.intervened_forward(
+            h_plus_i,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
+        # get the activations...
+        infected_pre_mlp_residual = defensive_block.pre_mlp_res_cache
+        infected_mlp_output = defensive_block.mlp_output_cache
+
+        def_loss += defence_criterion(
+            input=infected_mlp_output,
+            target=safe_block_output - infected_pre_mlp_residual)
+
+        # stability:
+        _ = defensive_block.intervened_forward(
+            h,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
+        # get the activations...
+        imm_pre_mlp_residual = defensive_block.pre_mlp_res_cache
+        imm_mlp_output = defensive_block.mlp_output_cache
+
         reg_loss += defence_criterion(
-            input=stability_pred,
-            target=stability_target)
+            input=imm_mlp_output,
+            target=safe_block_output - imm_pre_mlp_residual)
 
     return reg_loss, def_loss
 
