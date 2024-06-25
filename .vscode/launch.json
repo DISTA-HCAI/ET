@@ -19,7 +19,8 @@
                      "--init_eval_safety_prompts=2",
                      "--init_eval_performance_prompts=2",
                      "--performance_batches=2",
-                     "--tqdm",
+                    // "--tqdm",
+                     "--multiblock_defences",
                     // "--init_attack_intervention_places=mlp",
                     // "--starting_layer=9",
                     // "--defence_reg_coeff=2",
@@ -31,7 +32,7 @@
                      // "--save",
                      //"--mount_vaccines=super",
                      // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
-                     "--defence_regularization=compound",
+                     // "--defence_regularization=simple",
                     ]
         }
     ]
