@@ -16,7 +16,6 @@ from tqdm import tqdm, trange
 from pprint import pprint
 import wandb
 from datasets import load_dataset
-from my_modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
