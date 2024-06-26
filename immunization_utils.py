@@ -16,7 +16,6 @@ from tqdm import tqdm, trange
 from pprint import pprint
 import wandb
 from datasets import load_dataset
-from my_modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import Cache, StaticCache, DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
@@ -648,17 +647,8 @@ def init_single_layer_attack_config(model, layer, kwargs):
 
     representations = []
 
-    if kwargs['init_attack_intervention_places'] == 'mlp':
-        intervention_place = kwargs['init_attack_intervention_places'] + '_input'
-    elif kwargs['init_attack_intervention_places'] == 'block':
-        """
-        We should put the intervention here in the block's input, but it turns 
-        out that if we do that we interveene after the residual connection and that thing 
-        turns out to be difficult to immunise. So we assume for now attacks before the residual 
-        connection ( after the mlp output)
-        """
-        intervention_place = 'mlp_output' 
-
+    intervention_place = kwargs['init_attack_intervention_places'] + '_input'
+   
     embed_dim = model.config.hidden_size
 
     # Retrieve the intervention name:
@@ -684,20 +674,10 @@ def init_single_layer_attack_config(model, layer, kwargs):
 
 
 def init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs):
-    """
-    We train Low-rank matrices:
-    1) Low rank up_proj: (BASIC)
-        will try to inhibe the effects of adversarial interventions.
-        we will learn to make interveened input produce non-interveened output and
-        keeping original non-interveened input/output mapping. (on safety + general data)
-    2) Low rank down_proj: (ADVANCED)
-        the previous training may have a side-effect block performance drop 
-        this projection will learn to recover it using other dataset        
-    """
+
     defence_config = {
         'defences': {},
         'low_rank_defence': kwargs['init_low_rank_defence_dimension'],
-        'intervention_places': kwargs['init_defence_intervention_places']
         }
 
     collect_interventions = []
@@ -708,16 +688,10 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
     intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
     freezed_intervention_module = get_freezed_intervention_module(intervention_module[0])
 
-
     for defence_idx in range(defences):
-        if kwargs['init_attack_intervention_places'] == 'mlp':
-            assert defences == 1, "MLP defences must be local!!!" # means, no multiblock defences allowed
-            curr_defence_layer = intervention_layer + defence_idx  # this defences can be implemented at the same block
-        else:
-            assert kwargs['init_attack_intervention_places'] == 'block', \
-                "Fatal error: init_attack_intervention_places must be either \"block\" or \"mlp\"!!!"
-            curr_defence_layer = intervention_layer + defence_idx + 1 # this defences are done in the next block
-        
+
+        curr_defence_layer = intervention_layer + defence_idx
+
         defensive_module = get_defensive_module(
             model, 
             curr_defence_layer, 
@@ -725,22 +699,28 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
             kwargs)
 
         defence_config['defences'][curr_defence_layer] = {
-            'defence_decoder_block' : defensive_module
+            'defence_module' : defensive_module
         }
 
-        # TODO this conditions are used to think of a multiblock defence
-        if defence_idx == 0:
-            collect_interventions.append({
-            "layer": curr_defence_layer,
-            "component": kwargs['init_attack_intervention_places']+'_input'
-            })
-        
-        if defence_idx == defences - 1:
-            collect_interventions.append({
-            "layer": curr_defence_layer,
-            "component": kwargs['init_attack_intervention_places']+'_output'
-            })
+        # Append collect interventions:
 
+        # block_input (before pre-layer-norm) or mlp_input (after post-layer-norm)
+        collect_interventions.append({
+        "layer": curr_defence_layer,
+        "component": kwargs['init_attack_intervention_places']+'_input'
+        })
+        
+        """
+        # block output (after second residual connection) or mlp output (before second res connection)
+        collect_interventions.append({
+        "layer": curr_defence_layer,
+        "component": kwargs['init_attack_intervention_places']+'_output'
+        })
+        """
+
+        # EO Append collect interventions.
+
+    # craft defence config dict:
     defence_config['intervenable_config'] = pyvene.IntervenableConfig(
         model_type=type(model),
         representations=collect_interventions,
@@ -751,7 +731,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
     defence_config['dataset_size'] = kwargs['init_defence_prompts']
     defence_config['epochs'] =  kwargs['init_defence_epochs']
     defence_config['batch_size'] = kwargs['init_defence_batch_size']
-    defence_config['intervention_count'] = 2
+    defence_config['intervention_count'] = len(collect_interventions)
     defence_config['defence_criterion'] = kwargs['init_defence_criterion']
     defence_config['absortion_scaling'] = kwargs['init_defence_absortion_scaling']
     defence_config['safety'] = 0
@@ -1147,6 +1127,7 @@ def get_layer_causal_mask(model, input_ids, cache_position, attention_mask):
         DynamicCache.from_legacy_cache(None), 
         False)
 
+
 def generate_causal_mask(input_tensor, kwargs):
 
     dtype = torch.bfloat16
@@ -1159,6 +1140,155 @@ def generate_causal_mask(input_tensor, kwargs):
     return mask.repeat(input_tensor.shape[0],1,1,1).to(dtype).to(kwargs['device'])
 
 
+def mlp_immunisation_step(
+    batch,
+    intervenable_model,
+    defence_config,
+    defence_criterion,
+    kwargs):
+
+    reg_loss = 0
+    def_loss = 0
+    corruption_module = defence_config['adversarial_intervention_module']
+
+    intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
+    position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
+    batch['input_ids'] = batch['input_ids'].to(kwargs['device'])
+    batch['attention_mask'] = batch['attention_mask'].to(kwargs['device'])
+
+    with torch.no_grad():
+
+        intervention_outputs = intervenable_model(
+            base={'input_ids' : batch['input_ids'],
+                    'attention_mask': batch['attention_mask']},
+            unit_locations={"base" : intervention_locations})
+
+        batch_size = defence_config['batch_size']
+        intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
+        defence_tuples = list(defence_config['defences'].items())
+        assert len(intervention_outputs) == batch_size * len(defence_tuples), "something must went wrong!"
+
+    for defence_idx in range(len(defence_tuples)):
+        start_idx = defence_idx * batch_size
+        
+        orig_mlp_inputs = torch.vstack(intervention_outputs[
+            start_idx:
+            start_idx + batch_size])
+        
+        corrupt_mlp_inputs = corruption_module(orig_mlp_inputs)
+
+        defence_layer, defence_module = defence_tuples[defence_idx]
+        defensive_block = defence_module['defence_module']
+        
+        bsl_mlp_outputs = defensive_block(
+            orig_mlp_inputs)
+
+        # Neutralisation:
+        neutralisation_mlp_outs = defensive_block.intervened_forward(
+            corrupt_mlp_inputs)
+
+        def_loss += defence_criterion(
+            input=neutralisation_mlp_outs,
+            target=bsl_mlp_outputs)
+
+        # Stability:
+        stability_mlp_outputs = defensive_block.intervened_forward(
+            orig_mlp_inputs)
+
+        reg_loss += defence_criterion(
+            input=stability_mlp_outputs,
+            target=bsl_mlp_outputs)
+        
+
+    return reg_loss, def_loss
+
+
+def block_immunisation_step(   
+    batch,
+    intervenable_model,
+    defence_config,
+    defence_criterion,
+    kwargs):
+    
+    reg_loss = 0
+    def_loss = 0
+    corruption_module = defence_config['adversarial_intervention_module']
+
+    intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
+    position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
+    batch['input_ids'] = batch['input_ids'].to(kwargs['device'])
+    batch['attention_mask'] = batch['attention_mask'].to(kwargs['device'])
+
+    with torch.no_grad():
+
+        intervention_outputs = intervenable_model(
+            base={'input_ids' : batch['input_ids'],
+                    'attention_mask': batch['attention_mask']},
+            unit_locations={"base" : intervention_locations})
+
+        # causal attention mask computation. we have two options here:
+        if kwargs['causal_mask'] == 'llama':
+            causal_mask = get_layer_causal_mask(
+                intervenable_model.model, 
+                batch['input_ids'], 
+                position_ids, 
+                batch['attention_mask'])
+        else: causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
+
+        batch_size = defence_config['batch_size']
+        intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
+        defence_tuples = list(defence_config['defences'].items())
+        assert len(intervention_outputs) == batch_size * len(defence_tuples), "something must went wrong!"
+
+
+    for defence_idx in range(len(defence_tuples)):
+        start_idx = defence_idx * batch_size
+
+        h = torch.vstack(intervention_outputs[
+            start_idx:
+            start_idx + batch_size])
+
+        h_plus_i = corruption_module(h)
+    
+        defence_layer, defence_module = defence_tuples[defence_idx]
+        defensive_block = defence_module['defence_module']
+
+        safe_block_output =  defensive_block(
+            h,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
+
+        # neutralisation
+
+        # We run this forward pass just to capture activations in the places we care...
+        _ = defensive_block.intervened_forward(
+            h_plus_i,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
+        # get the activations...
+        infected_pre_mlp_residual = defensive_block.pre_mlp_res_cache
+        infected_mlp_output = defensive_block.mlp_output_cache
+
+        def_loss += defence_criterion(
+            input=infected_mlp_output,
+            target=safe_block_output - infected_pre_mlp_residual)
+
+        # stability:
+        _ = defensive_block.intervened_forward(
+            h,
+            attention_mask=causal_mask,
+            position_ids=position_ids)[0]
+        # get the activations...
+        imm_pre_mlp_residual = defensive_block.pre_mlp_res_cache
+        imm_mlp_output = defensive_block.mlp_output_cache
+
+        reg_loss += defence_criterion(
+            input=imm_mlp_output,
+            target=safe_block_output - imm_pre_mlp_residual)
+
+    return reg_loss, def_loss
+
+
 def defence_training_loop(
     defence_config, 
     defence_dataloader, 
@@ -1168,7 +1298,7 @@ def defence_training_loop(
     kwargs):
     
     if kwargs['verbose']: print('Training defence...')
-    mean_loss = 0
+    mean_total_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
     
@@ -1179,136 +1309,79 @@ def defence_training_loop(
     if kwargs['tqdm']: ranger = trange
     else: ranger = range
 
-    corruption_module = defence_config['adversarial_intervention_module']
-
     for epoch in ranger(defence_config['epochs']):
 
         epoch_defensive_loss = 0
         epoch_reg_loss = 0
-        epoch_loss = 0
+        epoch_total_loss = 0
 
         for batch_idx, batch in enumerate(defence_dataloader):
-            
-            reg_loss = 0
-            def_loss = 0
 
-            intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
-            position_ids = torch.tensor(intervention_locations[0][0], device=kwargs['device']).unsqueeze(0)
-            batch['input_ids'] = batch['input_ids'].to(kwargs['device'])
-            batch['attention_mask'] = batch['attention_mask'].to(kwargs['device'])
-            
-            with torch.no_grad():
+            if kwargs['init_attack_intervention_places'] == 'block':
 
-                intervention_outputs = intervenable_model(
-                    base={'input_ids' : batch['input_ids'],
-                          'attention_mask': batch['attention_mask']},
-                    unit_locations={"base" : intervention_locations})
+                reg_loss, def_loss = block_immunisation_step(
+                    batch,
+                    intervenable_model,
+                    defence_config,
+                    defence_criterion,
+                    kwargs)
 
-                if kwargs['causal_mask'] == 'llama':
-                    causal_mask = get_layer_causal_mask(
-                        intervenable_model.model, 
-                        batch['input_ids'], 
-                        position_ids, 
-                        batch['attention_mask'])
+            else: 
                 
-                else:          
-                    causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
-
-                # original_input_reps are the "inputs" of the stability training
-                original_input_representations = torch.vstack(
-                    [intervention_output.unsqueeze(0) 
-                        for intervention_output in intervention_outputs[0][1][:defence_config['batch_size']]])
-                # corrupted_input_reps are the "inputs" of the neutalization training:
-                corrupted_input_represetations = corruption_module(original_input_representations)
-                # original_output_reps are the "targets" of both stability and neutralization training:
-                original_output_representations = torch.vstack(
-                    [intervention_output.unsqueeze(0) 
-                        for intervention_output in intervention_outputs[0][1][defence_config['batch_size']:]])
-                
-            # WITH GRAD
-
-            # regularizing_output_reps will be the "preds" of the stability training
-            regularizing_output_representations = original_input_representations
-            # neutralizing output_reps will be the "preds" of the neutralization training
-            neutralizing_output_representations = corrupted_input_represetations
-
-            defence_tuples = list(defence_config['defences'].items())
-            for defence_idx in range(len(defence_tuples)):
-                defence_layer, defence_module = defence_tuples[defence_idx]
-                defensive_block = defence_module['defence_decoder_block']
-
-                if kwargs['init_attack_intervention_places'] == 'block':
-                    regularizing_output_representations = defensive_block.intervened_forward(
-                        regularizing_output_representations,
-                        attention_mask=causal_mask,
-                        position_ids=position_ids)[0]
-
-                    neutralizing_output_representations = defensive_block.intervened_forward(
-                        neutralizing_output_representations,
-                        attention_mask=causal_mask,
-                        position_ids=position_ids)[0]
-
-                elif kwargs['init_attack_intervention_places'] == 'mlp':
-                    
-                    regularizing_output_representations = defensive_block.intervened_forward(
-                        regularizing_output_representations)
-
-                    neutralizing_output_representations = defensive_block.intervened_forward(
-                        neutralizing_output_representations)
-
-
-                reg_loss += defence_criterion(
-                    input=regularizing_output_representations,
-                    target=original_output_representations)
-
-                def_loss += defence_criterion(
-                    input=neutralizing_output_representations,
-                    target=original_output_representations.clone())
-            
+                reg_loss, def_loss = mlp_immunisation_step(
+                    batch,
+                    intervenable_model,
+                    defence_config,
+                    defence_criterion,
+                    kwargs)           
 
             reg_loss = reg_loss * defence_config['regularization_coefficient']
 
+
+            total_loss = def_loss + reg_loss
+
             # Learning block:
-            defence_optimizer.zero_grad()
-            main_loss = def_loss
             if kwargs['defence_regularization'] == 'compound':
+                defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
                 reg_loss.backward()
-            else: main_loss = main_loss + reg_loss
-            main_loss.backward()
-            if kwargs['defence_regularization'] == 'compound': reg_optimizer.step()
-            defence_optimizer.step()
-
+                def_loss.backward()
+                reg_optimizer.step()
+                defence_optimizer.step()
+            else: 
+                defence_optimizer.zero_grad()
+                total_loss.backward()
+                defence_optimizer.step()
+            
             # Accumulate for stat reporting:
             epoch_reg_loss += reg_loss.detach()
             epoch_defensive_loss += def_loss.detach()        
-            epoch_loss += main_loss.detach()
-
+            epoch_total_loss += total_loss.detach()
 
 
         epoch_reg_loss /= batch_idx
         epoch_defensive_loss /= batch_idx
-        epoch_loss /= batch_idx
+        epoch_total_loss /= batch_idx
 
-        """ 
+        """        
         if kwargs['verbose'] and not kwargs['tqdm']: 
             print(f'defence epoch {epoch} mean defensive loss {epoch_defensive_loss}')
             print(f'defence epoch {epoch} mean regularization loss {epoch_reg_loss}')
-            print(f'defence epoch {epoch} mean loss {epoch_loss}')
-        """
+            print(f'defence epoch {epoch} mean loss {epoch_total_loss}')
+        """    
 
         mean_defensive_loss += epoch_defensive_loss.item()
         mean_reg_loss += epoch_reg_loss.item()
-        mean_loss += epoch_loss.item()
+        mean_total_loss += epoch_total_loss.item()
 
     mean_reg_loss /= defence_config['epochs']
     mean_defensive_loss /= defence_config['epochs']
-    mean_loss /= defence_config['epochs']
+    mean_total_loss /= defence_config['epochs']
 
     defence_results = {
         'mean_reg_loss':  mean_reg_loss,
         'mean_defensive_loss': mean_defensive_loss,
-        'mean_loss' : mean_loss
+        'mean_loss' : mean_total_loss
     }
 
     return defence_results  
@@ -1423,7 +1496,7 @@ def get_defence_optimizers(defence_config, kwargs):
     module_prefix = ("mlp." if kwargs["init_attack_intervention_places"] == "block" else "")
     if kwargs['defence_regularization'] == 'simple':
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
-            defence_module = defence_modules_dict['defence_decoder_block']
+            defence_module = defence_modules_dict['defence_module']
             # all loras are used for defence + reg. (could lead to gradient conflict)
             parameters_for_defence_optimizer.extend([param for param in defence_module.parameters() if param.requires_grad])
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate'])]
@@ -1435,7 +1508,7 @@ def get_defence_optimizers(defence_config, kwargs):
             'DOWN' in kwargs['defence_strategy'], 'Compound regularization needs defence strategy to be GATE_UP_DOWN'
             
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
-            defence_module = defence_modules_dict['defence_decoder_block']
+            defence_module = defence_modules_dict['defence_module']
             # gate and up projections are used for defence:
             for named_param in defence_module.named_parameters():
                 if named_param[0] in [
@@ -1471,7 +1544,7 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 
     for defence_layer, defence_module in defence_config['defences'].items():
         
-        defensive_block = defence_module['defence_decoder_block']
+        defensive_block = defence_module['defence_module']
         
         if isinstance(defensive_block, LlamaBlockDefendor):
             defensive_block = defensive_block.mlp
@@ -1509,7 +1582,7 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 
 def save_model(model, defence_layer, kwargs):
     
-    save_directory = kwargs['cache_dir']+'/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
+    save_directory = kwargs['cache_dir']+'/ET/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
     torch.save(model.model.layers[defence_layer].mlp.state_dict(), save_directory)
 
 
@@ -1539,8 +1612,16 @@ def evolve_attack_config(model, layer, prev_attack_config, kwargs):
 
 
 def evolve_defence_config(model, attack_config, attacked_model, prev_defence_config, kwargs):
-    defences = len(prev_defence_config['defences'])
-    defence_config = init_custom_defence_config(model, attack_config, attacked_model, defences, kwargs)
+    num_of_defences = len(prev_defence_config['defences'])
+
+    if kwargs['multiblock_defences']: 
+        intervention_key, intervention_module = list(attacked_model.interventions.items())[0]
+        intervention_layer = int(intervention_key.split('layer.')[1].split('.')[0])
+        total_layers = len(attacked_model.model.model.layers)
+        remaining_layers = total_layers - intervention_layer
+        num_of_defences = min( num_of_defences +1 , remaining_layers )
+
+    defence_config = init_custom_defence_config(model, attack_config, attacked_model, num_of_defences, kwargs)
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 20 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']

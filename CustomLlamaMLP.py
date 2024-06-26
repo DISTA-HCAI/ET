@@ -112,6 +112,9 @@ class LlamaBlockDefendor(nn.Module):
                                 list(self.post_attention_layernorm.parameters()):
             param.requires_grad = False
 
+        self.pre_mlp_res_cache = None
+        self.mlp_output_cache = None
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -153,12 +156,14 @@ class LlamaBlockDefendor(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+
         hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
+
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
@@ -197,12 +202,20 @@ class LlamaBlockDefendor(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+        
         hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
+
+        self.pre_mlp_res_cache = residual.detach()
+
         hidden_states = self.post_attention_layernorm(hidden_states)
+
         hidden_states = self.mlp.intervened_forward(hidden_states)
+
+        self.mlp_output_cache = hidden_states  # we do not detach here, as these gradients will drive the learning...
+
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)

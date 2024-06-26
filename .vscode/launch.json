@@ -16,11 +16,12 @@
                      "--verbose", 
                      "--init_attack_prompts=10",
                      "--init_defence_prompts=20",
-                     "--init_eval_safety_prompts=5",
-                     "--init_eval_performance_prompts=5",
-                     "--performance_batches=5",
-                     "--tqdm",
-                     "--init_attack_intervention_places=mlp",
+                     "--init_eval_safety_prompts=2",
+                     "--init_eval_performance_prompts=2",
+                     "--performance_batches=2",
+                    // "--tqdm",
+                     "--multiblock_defences",
+                    // "--init_attack_intervention_places=mlp",
                     // "--starting_layer=9",
                     // "--defence_reg_coeff=2",
                      "--min_toxicity_increase_factor=0.0",
@@ -31,7 +32,7 @@
                      // "--save",
                      //"--mount_vaccines=super",
                      // "--mount_vaccines=VACCINE_1_save_layer1_adapter4.pth:VACCINE_1_save_layer1_adapter9.pth"
-                     "--defence_regularization=compound",
+                     // "--defence_regularization=simple",
                     ]
         }
     ]
