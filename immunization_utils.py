@@ -1303,8 +1303,7 @@ def defence_training_loop(
     mean_reg_loss = 0
     
     defence_optimizer = defence_optimizers[0]
-    if kwargs['defence_regularization'] == 'compound':
-        reg_optimizer = defence_optimizers[1]
+    reg_optimizer = defence_optimizers[1]
     
     if kwargs['tqdm']: ranger = trange
     else: ranger = range
@@ -1499,7 +1498,7 @@ def get_defence_optimizers(defence_config, kwargs):
             defence_module = defence_modules_dict['defence_module']
             # all loras are used for defence + reg. (could lead to gradient conflict)
             parameters_for_defence_optimizer.extend([param for param in defence_module.parameters() if param.requires_grad])
-        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate'])]
+        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']), None]
     
     else:
         assert kwargs['defence_regularization'] == 'compound' and \
