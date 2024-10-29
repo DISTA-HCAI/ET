@@ -1,10 +1,17 @@
+
+# do not upgrade:
 datasets==2.17.0
-wandb==0.18.5
-huggingface-hub==0.26.2
-tokenizers==0.20.1
 transformers==4.45.1
-accelerate==1.0.1
 torch==2.3.0
+
+# upgrade and check:
+wandb>=0.18.5
+huggingface-hub>=0.26.2
+tokenizers>=0.20.1
+accelerate>=1.0.1
+
+# dista defaults...
+numexpr>=2.10.1
 
 """
 # torch 2.3.0 stuff maybe 
