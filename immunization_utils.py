@@ -302,7 +302,7 @@ def get_performance_eval_dataset(tokenizer, kwargs):
     testdata = load_dataset("wikitext",
                             "wikitext-2-raw-v1",
                             split="test",
-                            cache_dir=kwargs["cache_dir"],)
+                            cache_dir=kwargs["dataset_cache_dir"])
     encoded_test_data = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
     return encoded_test_data
 
