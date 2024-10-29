@@ -6,3 +6,4 @@ __pycache__
 media
 # our stuff
 experiments3.sh
+.vscode/settings.json
