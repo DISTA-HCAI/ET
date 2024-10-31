@@ -9,6 +9,9 @@ wandb>=0.18.5
 huggingface-hub>=0.26.2
 tokenizers>=0.20.1
 accelerate>=1.0.1
+antlr4-python3-runtime>=4.9.3
+hydra-core>=1.3.2
+omegaconf>=2.3.0
 
 # dista defaults...
 numexpr>=2.10.1

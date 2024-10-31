@@ -4,6 +4,7 @@ local_checkpoints
 wandb
 __pycache__
 media
+outputs
 # our stuff
 experiments3.sh
 .vscode/settings.json

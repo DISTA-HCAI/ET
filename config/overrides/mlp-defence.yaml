@@ -1,0 +1,8 @@
+verbose: true
+logging: true
+torch_seed: 3
+save: true
+min_performance_percentage_defence: 0.5
+min_performance_percentage_attack: 0.2
+init_attack_intervention_places: mlp
+run_name: experimental_vaccine

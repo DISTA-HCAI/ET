@@ -177,7 +177,7 @@ def mount_vaccines(model, kwargs):
         
 def initialize(args):
     
-    kwargs = vars(args)
+    kwargs = dict(args)
     torch.manual_seed(kwargs['torch_seed'])
     model, tokenizer = load_model(kwargs)
     model = mount_vaccines(model, kwargs)
