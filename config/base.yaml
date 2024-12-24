@@ -41,7 +41,7 @@ device: cuda
 # Log to wandb
 logging: false
 
-# Resistance test of model (keeps performing attacks even if these are successful, to exctract ASR)
+# Resistance test of model (keeps performing attacks even if these are successful, to extract ASR)
 baseline: false
 
 # Save model after absortion
@@ -77,10 +77,10 @@ train_red_teaming_label_col: target
 # Column name for input prompts in evaluation dataset
 test_red_teaming_input_col: Behavior
 
-# Number of prompts for initial performance evaluation
+# Initial Number of prompts for performance evaluation
 init_eval_performance_prompts: 50
 
-# Number of prompts for initial safety evaluation
+# Initial Number of prompts for safety evaluation
 init_eval_safety_prompts: 50
 
 # Learning rate for training
@@ -95,10 +95,10 @@ max_seq_len: 8194
 # Number of batches for performance evaluation
 performance_batches: 30
 
-# Number of prompts for initial attack
+# Initial Number of prompts for attacks
 init_attack_prompts: 20
 
-# Number of prompts for initial defence
+# Initial Number of prompts for defences
 init_defence_prompts: 20
 
 # Causal mask type
@@ -107,16 +107,16 @@ causal_mask: llama
 # Maximum number of generated tokens
 max_gen_tokens: 64
 
-# Batch size for initial attack
+# Intial Batch size for attacks
 init_attack_batch_size: 10
 
-# Batch size for initial defence
+# Initial Batch size for defences
 init_defence_batch_size: 10
 
-# Intervention places for initial attack
+# Intial Intervention places for attacks
 init_attack_intervention_places: block
 
-# Intervention places for initial defence
+# Initial Intervention places for defences
 init_defence_intervention_places: -----
 
 # Defence strategy
@@ -137,7 +137,7 @@ init_defence_absortion_scaling: 1.0
 # Regularization coefficient for defence
 defence_reg_coeff: 1.0
 
-# Criterion for initial defence
+# Initial Criterion for defence
 init_defence_criterion: fro
 
 # Dimension for low-rank attack
@@ -146,10 +146,10 @@ init_low_rank_attack_dimension: 2
 # Dimension for low-rank defence
 init_low_rank_defence_dimension: 2
 
-# Dropout probability for initial attack
+# Initial Dropout probability for attacks
 init_attack_dropout: 0.1
 
-# Dropout probability for initial defence
+# Intital Dropout probability for defences
 init_defence_dropout: 0.1
 
 # Intervention type for initial attack
