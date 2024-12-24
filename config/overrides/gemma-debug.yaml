@@ -1,6 +1,6 @@
 # config/debug.yaml
 
-model_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+model_name_or_path: google/gemma-2-2b-it
 eval_model: meta-llama/Llama-Guard-3-1B
 verbose : true 
 init_attack_prompts: 10

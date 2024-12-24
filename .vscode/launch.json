@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name":"immunization",
+            "name":"debug",
             "type":"python",
             "request":"launch",
             "program":"immunization.py",
@@ -13,6 +13,27 @@
             "justMyCode": false,
             "env": {"CUDA_VISIBLE_DEVICES": "0"},
             "args": ["override=debug"]       
-        }
+        },
+        {
+            "name":"gemma-debug",
+            "type":"python",
+            "request":"launch",
+            "program":"immunization.py",
+            "console":"integratedTerminal",
+            "justMyCode": false,
+            "env": {"CUDA_VISIBLE_DEVICES": "1"},
+            "args": ["override=gemma-debug"]       
+        },
+        {
+            "name":"mydebug",
+            "type":"python",
+            "request":"launch",
+            "program":"immunization.py",
+            "console":"integratedTerminal",
+            "justMyCode": false,
+            "env": {"CUDA_VISIBLE_DEVICES": "0"},
+            "args": ["override=other-singleblock",
+                    "logging=false"]       
+        },
     ]
 }
