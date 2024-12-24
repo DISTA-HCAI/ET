@@ -6,7 +6,7 @@ override: ""
 model_name_or_path: meta-llama/Meta-Llama-3-8B-Instruct
 
 # The safety evaluation lLM
-eval_model: meta-llama/Meta-Llama-Guard-2-8B
+eval_model: meta-llama/Llama-Guard-3-8B
 
 # Cache directory for model's weights
 cache_dir: /home/jovyan/.cache/huggingface/hub
