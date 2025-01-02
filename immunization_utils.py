@@ -21,7 +21,7 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.models.llama import modeling_llama
 from collections import defaultdict, OrderedDict
 from copy import deepcopy  # Use deepcopy to avoid modifying the original template
-
+from peft import PeftModel
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -480,6 +480,15 @@ def load_model(kwargs):
         device_map=kwargs['device'],
         cache_dir=kwargs['cache_dir']
     )
+
+    if kwargs['lora_adaptor']:
+        if kwargs['verbose']: print('Loading the lora adaptor...\n\n')
+        model = PeftModel.from_pretrained(
+            model,
+            kwargs['lora_adaptor'],
+            )
+        model = model.merge_and_unload()
+        
 
     # get tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(
