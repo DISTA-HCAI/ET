@@ -1,0 +1,9 @@
+lora_adaptor: /home/jovyan/.cache/huggingface/hub/booster/Meta-Llama-3-8B-Instruct_smooth_5_0.1_5000_5000
+verbose: true
+logging: true
+save: true
+min_performance_percentage_attack: 0.5
+min_performance_percentage_defence: 0.8
+min_safety_percentage: 0.8
+init_defence_epochs: 50
+max_immunization_rounds: 4
