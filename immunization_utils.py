@@ -133,7 +133,7 @@ def update_state_dict(current_state_dict, new_state_dict, alpha=0.9):
         # Ensure both tensors have the same shape
         if current_tensor.shape != new_tensor.shape:
             raise ValueError(f"Shape mismatch for key '{key}': {current_tensor.shape} vs {new_tensor.shape}")
-
+        print('updating key: ',key)
         # Perform the weighted average directly on tensors
         updated_tensor = (1-alpha) * current_tensor + (alpha) * new_tensor 
         updated_state_dict[key] = updated_tensor
@@ -147,18 +147,18 @@ def mount_vaccines(model, kwargs):
         if kwargs['mount_vaccines'] == 'super' or '*' in kwargs['mount_vaccines']: 
 
             if kwargs['mount_vaccines'] == 'super':
-                matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
+                matching_filenames = find_files_with_substring(kwargs['cache_dir']+'/ET/', 'VACCINE')
                 matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename and 'ml' not in filename]
             elif kwargs['mount_vaccines'] == 'super_ml':
-                matching_filenames = find_files_with_substring(kwargs['cache_dir'], 'VACCINE')
+                matching_filenames = find_files_with_substring(kwargs['cache_dir']+'/ET/', 'VACCINE')
                 matching_filenames = [filename for filename in matching_filenames if 'GU' not in filename]
             elif '*' in kwargs['mount_vaccines']:
-                matching_filenames = find_files_with_substring(kwargs['cache_dir'], kwargs['mount_vaccines'].split('*')[0])
-            
+                matching_filenames = find_files_with_substring(kwargs['cache_dir']+'/ET/', kwargs['mount_vaccines'].split('*')[0])
+            print('will mount the following vaccines: ', matching_filenames)
             defenders_per_layer = defaultdict(list)
             for defender_adaptor in matching_filenames:
                 layer = int(defender_adaptor.split('layer')[1].split('_')[0])
-                defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/'+defender_adaptor))
+                defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/ET/'+defender_adaptor))
             for layer, list_of_layer_dicts in defenders_per_layer.items():
                 print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
                 mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
@@ -754,7 +754,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
 
 def is_successful_attack(attack_config, kwargs):
     
-    return (attack_config['toxicity'] >= (kwargs['init_toxicity'] * kwargs['min_toxicity_increase_factor']) and 
+    return (attack_config['toxicity'] > (kwargs['init_toxicity'] * kwargs['min_toxicity_increase_factor']) and 
             attack_config['performance'] >= (kwargs['init_performance'] * kwargs['min_performance_percentage_attack']))
     
 
