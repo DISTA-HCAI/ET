@@ -159,7 +159,7 @@ def main(cfg: DictConfig):
                         # Are we absorbing defences on the go?
                         if not kwargs['memory_less']:
                             model = absorb_defender_adaptor(model, defence_config, kwargs)
-                            logging_dict['wandb_run'].log({'Absorbed defences at layer': layer+1, STEP_LABEL: kwargs['timestep']})
+                            logging_dict['wandb_run'].log({'Absorbed defences at layer': layer, STEP_LABEL: kwargs['timestep']})
                         
                         # Shall we save our defensive modules?
                         if kwargs['save']:
