@@ -1396,9 +1396,11 @@ def defence_training_loop(
 
 
 def get_max_defence_rounds(model, current_layer, kwargs):
-    max_defence_rounds = model.config.num_hidden_layers - 1 - current_layer
-    return min(kwargs['max_defence_rounds'], max_defence_rounds)
-
+    if kwargs['multiblock_defences']:
+        max_defence_rounds = model.config.num_hidden_layers - 1 - current_layer
+        return min(kwargs['max_defence_rounds'], max_defence_rounds)
+    else:
+        return kwargs['max_defence_rounds']
                     
 def report_attack_config(attack_config, logging_dict, kwargs):
     logging_dict['wandb_run'].log(
