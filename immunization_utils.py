@@ -1397,7 +1397,7 @@ def defence_training_loop(
 
 def get_max_defence_rounds(model, current_layer, kwargs):
     if kwargs['multiblock_defences']:
-        max_defence_rounds = model.config.num_hidden_layers - 1 - current_layer
+        max_defence_rounds = model.config.num_hidden_layers - current_layer
         return min(kwargs['max_defence_rounds'], max_defence_rounds)
     else:
         return kwargs['max_defence_rounds']
