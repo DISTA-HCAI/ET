@@ -2,7 +2,10 @@ verbose: true
 logging: true
 torch_seed: 3
 save: true
-min_performance_percentage_defence: 0.5
-min_performance_percentage_attack: 0.2
-init_attack_intervention_places: block
-run_name: new_vaccine_5_replication
+min_performance_percentage_attack: 0.5
+min_performance_percentage_defence: 0.8
+min_safety_percentage: 0.8
+init_defence_epochs: 50
+max_defence_rounds: 4
+max_attack_rounds: 4
+run_name: et_block

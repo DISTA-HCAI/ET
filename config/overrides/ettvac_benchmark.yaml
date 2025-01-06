@@ -1,4 +1,4 @@
-lora_adaptor: /home/jovyan/.cache/huggingface/hub/vaccine/Meta-Llama-3-8B-Instruct_vaccine_3_20
+lora_adaptor: /home/jovyan/.cache/huggingface/hub/t_vaccine/Meta-Llama-3-8B-Instruct_TVaccine_3_8_20_200_200_20
 mount_vaccines: et_t_vac*
 verbose: true
 logging: true

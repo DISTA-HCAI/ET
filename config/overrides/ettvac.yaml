@@ -8,5 +8,5 @@ min_safety_percentage: 0.8
 init_defence_epochs: 50
 max_immunization_rounds: 8
 max_defence_rounds: 4
-max_attack_rounds: 3
+max_attack_rounds: 4
 run_name: et_t_vac
