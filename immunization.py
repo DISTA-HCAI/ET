@@ -163,7 +163,7 @@ def main(cfg: DictConfig):
                         
                         # Shall we save our defensive modules?
                         if kwargs['save']:
-                            save_model(model, layer+1, kwargs)
+                            save_model(model, layer, kwargs)
 
                         log_successful_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
                         defence_succeeded = True
