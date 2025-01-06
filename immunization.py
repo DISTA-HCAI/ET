@@ -123,7 +123,7 @@ def main(cfg: DictConfig):
                 break  # go to next layer
 
             # If the attack was successful instead, we start the defensive phase. 
-            elif layer < model.config.num_hidden_layers - 1:   # (we can't implement defences on the last block!)
+            else: 
 
                 if kwargs['verbose']: print('Defensive phase...\n')
                 outer_defence_rounds += 1
@@ -191,9 +191,7 @@ def main(cfg: DictConfig):
                         kwargs)
                     if kwargs['verbose']: print('Will continue with next layers... \n')
                     break  # go to next layer
-            
-            else:
-                break  # layers ended!
+
 
         if defence_succeeded and (immunization_round == kwargs['max_immunization_rounds'] - 1):   
             # we defended our model on each attack, and no more immunization rounds available...
