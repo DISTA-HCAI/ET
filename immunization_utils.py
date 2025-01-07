@@ -134,7 +134,7 @@ def update_state_dict(current_state_dict, new_state_dict, alpha=0.9):
         if current_tensor.shape != new_tensor.shape:
             raise ValueError(f"Shape mismatch for key '{key}': {current_tensor.shape} vs {new_tensor.shape}")
         print('updating key: ',key)
-        updated_tensor = current_tensor + alpha * new_tensor 
+        updated_tensor = (1 - alpha) * current_tensor + alpha * new_tensor 
         updated_state_dict[key] = updated_tensor
     
     return updated_state_dict
@@ -166,11 +166,11 @@ def mount_vaccines(model, kwargs):
                     updated_state_dict = update_state_dict(current_state_dict, mean_layer_state_from_adapters, kwargs['vaccine_weight'])
                     model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
                 else:
-                    print(f'Mounting {len(list_of_layer_dicts)} adapters at layer {layer}')
-                    for adapter in list_of_layer_dicts:
-                        current_state_dict = model.model.layers[layer].mlp.state_dict()
-                        updated_state_dict = update_state_dict(current_state_dict, adapter, kwargs['vaccine_weight'])
-                        model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
+                    print(f'Mounting the last adapter of {len(list_of_layer_dicts)} at layer {layer}')
+                    adapter = list_of_layer_dicts[-1]
+                    current_state_dict = model.model.layers[layer].mlp.state_dict()
+                    updated_state_dict = update_state_dict(current_state_dict, adapter, kwargs['vaccine_weight'])
+                    model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
 
         else:
             for vaccine_path in kwargs['mount_vaccines'].split(':'):
@@ -189,9 +189,11 @@ def initialize(args):
 
     if kwargs['save_immunised']:
         # save model to disk:
+        print('Saving model to disk: ', kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
         model.save_pretrained(kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
         tokenizer.save_pretrained(kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
-
+        print('Done saving model to disk: ', kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
+        
     eval_model, eval_tokenizer = load_eval_model(kwargs)
     training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
     safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)
