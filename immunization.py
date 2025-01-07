@@ -34,7 +34,12 @@ def main(cfg: DictConfig):
     # Immunization loop:
     #
 
-    for layer in range(kwargs['starting_layer'], model.config.num_hidden_layers):
+    if kwargs['reverse']:
+        ranger = range(kwargs['starting_layer'], -1, -1)
+    else:
+        ranger = range(kwargs['starting_layer'], model.config.num_hidden_layers)
+        
+    for layer in ranger:
 
         # Reporting qualitative results of a successful immunization on the previous layer (for the paper):
         if (post_successful_attack_behaviour is not None and post_failed_attack_behaviour is not None) : 
