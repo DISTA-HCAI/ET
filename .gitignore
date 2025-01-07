@@ -8,3 +8,4 @@ outputs
 # our stuff
 experiments3.sh
 .vscode/settings.json
+tinyBenchmarks.pkl
