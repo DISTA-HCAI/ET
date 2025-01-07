@@ -5,6 +5,7 @@ from peft import PeftModel
 import json
 import sys
 from lm_eval.loggers import WandbLogger
+import wandb
 
 # read the lora adaptor param from command line:
 # python eval.py tvac
@@ -15,6 +16,15 @@ if len(sys.argv) < 2:
 
 baseline_name = sys.argv[1]
 
+all_tiny_tasks = [
+    "tinyArc",
+    "tinyGSM8k",
+    "tinyHellaswag",
+    "tinyMMLU",
+    "tinyTruthfulQA",
+    "tinyTruthfulQA_mc1",
+    "tinyWinogrande",
+]
 
 lora_adaptors = {'tvac': '/home/jovyan/.cache/huggingface/hub/t_vaccine/Meta-Llama-3-8B-Instruct_TVaccine_3_8_20_200_200_20',
                 'vac': '/home/jovyan/.cache/huggingface/hub/vaccine/Meta-Llama-3-8B-Instruct_vaccine_3_20',
@@ -23,7 +33,9 @@ lora_adaptors = {'tvac': '/home/jovyan/.cache/huggingface/hub/t_vaccine/Meta-Lla
                 'repnoise': '/home/jovyan/.cache/huggingface/hub/repnoise/Meta-Llama-3-8B-Instruct_repnoise_0.1_0.001_20',
                 'no-imm': None,
                 'cb': None,
-                'debug': None}
+                'debug': None,
+                'et':None
+                }
 
 base_model = {'tvac': 'meta-llama/Meta-Llama-3-8B-Instruct',
                 'vac': 'meta-llama/Meta-Llama-3-8B-Instruct',
@@ -32,7 +44,8 @@ base_model = {'tvac': 'meta-llama/Meta-Llama-3-8B-Instruct',
                 'repnoise': 'meta-llama/Meta-Llama-3-8B-Instruct',
                 'no-imm': 'meta-llama/Meta-Llama-3-8B-Instruct',
                 'cb': '/home/jovyan/.cache/huggingface/hub/Llama-3-8b_CB',
-                'debug': 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+                'debug': 'TinyLlama/TinyLlama-1.1B-Chat-v1.0',
+                'et': '/home/jovyan/.cache/huggingface/hub/Meta-Llama-3-8B-Instruct_ET'
                 }
 
 print(f'Loading the model {base_model[baseline_name]} that we want to eval...\n\n')
@@ -70,7 +83,7 @@ wandb_logger = WandbLogger(
 
 results = lm_eval.simple_evaluate(
     model=model,  # Pass your loaded model object here
-    tasks=['tinyHellaswag', 'tinyMMLU', 'tinyGSM8k'],
+    tasks=all_tiny_tasks,
     task_manager=task_manager,
     device='cuda',
     log_samples=True,
@@ -79,3 +92,5 @@ results = lm_eval.simple_evaluate(
 wandb_logger.post_init(results)
 wandb_logger.log_eval_result()
 wandb_logger.log_eval_samples(results["samples"])  # if log_samples
+
+wandb.finish()
