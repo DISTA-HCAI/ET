@@ -160,12 +160,18 @@ def mount_vaccines(model, kwargs):
                 layer = int(defender_adaptor.split('layer')[1].split('_')[0])
                 defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/ET/'+defender_adaptor))
             for layer, list_of_layer_dicts in defenders_per_layer.items():
-                print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
-                mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
-                model.model.layers[layer].mlp.load_state_dict(mean_layer_state_from_adapters)
-                current_state_dict = model.model.layers[layer].mlp.state_dict()
-                updated_state_dict = update_state_dict(current_state_dict, mean_layer_state_from_adapters, kwargs['vaccine_weight'])
-                model.model.layers[layer].mlp.load_state_dict(updated_state_dict) 
+                if kwargs['avg_multiple_vaccines']:
+                    print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
+                    mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
+                    current_state_dict = model.model.layers[layer].mlp.state_dict()
+                    updated_state_dict = update_state_dict(current_state_dict, mean_layer_state_from_adapters, kwargs['vaccine_weight'])
+                    model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
+                else:
+                    print(f'Mounting {len(list_of_layer_dicts)} adapters at layer {layer}')
+                    for adapter in list_of_layer_dicts:
+                        current_state_dict = model.model.layers[layer].mlp.state_dict()
+                        updated_state_dict = update_state_dict(current_state_dict, adapter, kwargs['vaccine_weight'])
+                        model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
 
         else:
             for vaccine_path in kwargs['mount_vaccines'].split(':'):
@@ -181,6 +187,12 @@ def initialize(args):
     torch.manual_seed(kwargs['torch_seed'])
     model, tokenizer = load_model(kwargs)
     model = mount_vaccines(model, kwargs)
+
+    if kwargs['save_immunised']:
+        # save model to disk:
+        model.save_pretrained(kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
+        tokenizer.save_pretrained(kwargs['cache_dir']+'/'+kwargs['model_name_or_path'].split('/')[-1]+'_ET')
+
     eval_model, eval_tokenizer = load_eval_model(kwargs)
     training_attack_data_dict = load_training_red_teaming_data(tokenizer, kwargs)
     safety_eval_data = load_eval_red_teaming_data(tokenizer, kwargs)

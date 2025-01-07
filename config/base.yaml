@@ -181,3 +181,12 @@ mount_vaccines: ""
 
 # Weight for vaccines
 vaccine_weight: 1.0
+
+# Implement vaccines from last block to first
+reverse: false
+
+# when finding more than one vaccine for a layer, average them
+avg_multiple_vaccines: true
+
+# save immunised candidate to disk
+save_immunised: false

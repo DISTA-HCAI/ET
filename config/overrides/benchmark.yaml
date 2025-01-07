@@ -10,3 +10,5 @@ run_name: et_hard_benchmark
 min_performance_percentage_attack: 0.5
 min_performance_percentage_defence: 0.8
 min_safety_percentage: 0.8
+avg_multiple_vaccines: false
+# save_immunised: true
