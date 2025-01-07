@@ -31,9 +31,19 @@
             "program":"immunization.py",
             "console":"integratedTerminal",
             "justMyCode": false,
-            "env": {"CUDA_VISIBLE_DEVICES": "0"},
-            "args": ["override=other-singleblock",
+            "env": {"CUDA_VISIBLE_DEVICES": "1"},
+            "args": ["override=benchmark",
                     "logging=false"]       
+        },
+        {
+            "name":"eval",
+            "type":"python",
+            "request":"launch",
+            "program":"eval.py",
+            "console":"integratedTerminal",
+            "justMyCode": false,
+            "env": {"CUDA_VISIBLE_DEVICES": "0"},
+            "args": ["debug"]       
         },
     ]
 }
