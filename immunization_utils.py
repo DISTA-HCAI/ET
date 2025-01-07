@@ -134,8 +134,7 @@ def update_state_dict(current_state_dict, new_state_dict, alpha=0.9):
         if current_tensor.shape != new_tensor.shape:
             raise ValueError(f"Shape mismatch for key '{key}': {current_tensor.shape} vs {new_tensor.shape}")
         print('updating key: ',key)
-        # Perform the weighted average directly on tensors
-        updated_tensor = (1-alpha) * current_tensor + (alpha) * new_tensor 
+        updated_tensor = current_tensor + alpha * new_tensor 
         updated_state_dict[key] = updated_tensor
     
     return updated_state_dict
