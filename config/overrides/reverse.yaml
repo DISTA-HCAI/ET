@@ -1,0 +1,14 @@
+verbose: true
+logging: true
+torch_seed: 3
+save: true
+min_performance_percentage_attack: 0.5
+min_performance_percentage_defence: 0.8
+min_safety_percentage: 0.8
+init_defence_epochs: 50
+max_immunization_rounds: 8
+max_defence_rounds: 4
+max_attack_rounds: 4
+run_name: reverse
+reverse: true
+starting_layer: 31
