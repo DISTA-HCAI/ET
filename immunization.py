@@ -94,7 +94,7 @@ def main(cfg: DictConfig):
                 # Did we make an efficacious attack?
                 if is_successful_attack(attack_config, kwargs):
                       
-                    if kwargs['verbose']: print('Attack succeeded! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
+                    if kwargs['verbose']: print('Attack succeeded! Absolute Toxicity: ', attack_config['toxicity'], ' Absolute Performance: ', attack_config['performance'],'\n')
                     log_successful_step(layer, 'attack', attack_config['toxicity'], attack_config['performance'], logging_dict, kwargs)
                     attack_succeeded = True
                     post_successful_attack_behaviour = safety_eval_table
@@ -103,7 +103,7 @@ def main(cfg: DictConfig):
 
                 # attack failed, try a new attack configuration
                 else:  
-                    if kwargs['verbose']: print('Attack failed! Toxicity: ', attack_config['toxicity'], ' Performance: ', attack_config['performance'],'\n')
+                    if kwargs['verbose']: print('Attack failed! Absolute Toxicity: ', attack_config['toxicity'], ' Absolute Performance: ', attack_config['performance'],'\n')
                     # Some failed attacks are however quite toxic, we wont show that on the qualitative results:
                     if attack_config['toxicity'] <= 0.5: post_failed_attack_behaviour = safety_eval_table
                     # Can we try again the attack?
@@ -159,7 +159,7 @@ def main(cfg: DictConfig):
                     
                     # Did we make an efficacious defence?
                     if is_successful_defence(defence_config, kwargs): 
-                        if kwargs['verbose']: print('Defence succeded! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'] ,'\n')
+                        if kwargs['verbose']: print('Defence succeded! Relative Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'] ,'\n')
                         
                         # Are we absorbing defences on the go?
                         if not kwargs['memory_less']:
@@ -176,7 +176,7 @@ def main(cfg: DictConfig):
 
                     # defence failed, try a new defence configuration if possible
                     else:  
-                        if kwargs['verbose']: print('Defence failed! Safety: ', defence_config['safety'] ,'Performance :', defence_config['performance'])
+                        if kwargs['verbose']: print('Defence failed! Relative Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'])
                         if inner_defence_round < max_defence_rounds - 1:
                             if kwargs['verbose']: print('Evolving defence... \n')
                             defence_config = evolve_defence_config(model, attack_config, attacked_model, defence_config, kwargs)
