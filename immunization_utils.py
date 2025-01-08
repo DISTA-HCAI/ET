@@ -1555,7 +1555,8 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
     return DataLoader(
             data_module['train_dataset'],
             batch_size=defence_config['batch_size'],
-            collate_fn=data_module['data_collator']
+            collate_fn=data_module['data_collator'],
+            drop_last=True
         )
 
 
@@ -1648,7 +1649,7 @@ def evolve_defence_config(model, attack_config, attacked_model, prev_defence_con
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 20 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
-    defence_config['epochs'] += 5
+    defence_config['epochs'] = prev_defence_config['epochs'] + 50
     return defence_config
 
 
