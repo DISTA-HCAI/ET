@@ -155,7 +155,9 @@ def main(cfg: DictConfig):
                         performance_eval_data,
                         logging_dict, 
                         kwargs)
-                    log_step(layer, 'defence', 1 - defence_config['safety'], defence_config['performance'], logging_dict, kwargs)
+                    abs_safety = defence_config['safety'] * (kwargs['init_safety'] + 1e-10)
+                    abs_toxicity = 1 - abs_safety
+                    log_step(layer, 'defence', abs_toxicity, defence_config['performance'], logging_dict, kwargs)
                     
                     # Did we make an efficacious defence?
                     if is_successful_defence(defence_config, kwargs): 
