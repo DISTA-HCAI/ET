@@ -4,7 +4,6 @@ verbose: true
 logging: true
 save: false
 baseline: true
-memory_less: true
 max_defence_rounds: 0
 max_attack_rounds: 4
 run_name: new_ettvacc_hard_benchmark

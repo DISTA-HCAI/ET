@@ -861,6 +861,7 @@ def reft_attack(
     training_args = transformers.TrainingArguments(
         num_train_epochs=attack_config['epochs'],
         output_dir="local_checkpoints/tmp_reft",  # TODO what to do here?
+        overwrite_output_dir=True,
         per_device_train_batch_size=attack_config['batch_size'],
         learning_rate=kwargs['learning_rate'],
         report_to="none",
@@ -1493,7 +1494,8 @@ def custom_defence(
         False,
         kwargs)
 
-    model = reset_defended_module(model, defence_config, kwargs)
+    # we do not reset the module, if the defence fails, we keep training on that...
+    # model = reset_defended_module(model, defence_config, kwargs)
 
     rel_tox = toxicity_score / (kwargs['init_toxicity'] + 1e-10)
 
@@ -1562,9 +1564,12 @@ def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
 
 def absorb_defender_adaptor(model, defence_config, kwargs):
     
-    kwargs['cached_original_modules'] = {'UP': {},
-                                         'GATE': {},
-                                         'DOWN': {}}
+    print('Absorbing candidate defender...')
+
+    if kwargs['first_inner_defence_round']:
+        kwargs['cached_original_modules'] = {'UP': {},
+                                            'GATE': {},
+                                            'DOWN': {}}
 
     for defence_layer, defence_module in defence_config['defences'].items():
         
@@ -1575,7 +1580,8 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
         else: assert isinstance(defensive_block, CustomLlamaMLP), "Fatal Error!!"
 
         if 'GATE' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['GATE'][defence_layer] = model.model.layers[defence_layer].mlp.gate_proj.weight.clone()
+            if kwargs['first_inner_defence_round']:
+                kwargs['cached_original_modules']['GATE'][defence_layer] = model.model.layers[defence_layer].mlp.gate_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.gate_B.weight, 
                 defensive_block.gate_A.weight)
@@ -1584,7 +1590,8 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'UP' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['UP'][defence_layer] = model.model.layers[defence_layer].mlp.up_proj.weight.clone()
+            if kwargs['first_inner_defence_round']:
+                kwargs['cached_original_modules']['UP'][defence_layer] = model.model.layers[defence_layer].mlp.up_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.up_B.weight, 
                 defensive_block.up_A.weight)
@@ -1593,7 +1600,8 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'DOWN' in kwargs['defence_strategy']:
-            kwargs['cached_original_modules']['DOWN'][defence_layer] = model.model.layers[defence_layer].mlp.down_proj.weight.clone()
+            if kwargs['first_inner_defence_round']:
+                kwargs['cached_original_modules']['DOWN'][defence_layer] = model.model.layers[defence_layer].mlp.down_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
                 defensive_block.down_B.weight, 
                 defensive_block.down_A.weight)
@@ -1601,6 +1609,7 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                 model.model.layers[defence_layer].mlp.down_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
+        
     return model
 
 
@@ -1613,6 +1622,7 @@ def save_model(model, defence_layer, kwargs):
 def reset_defended_module(model, defence_config, kwargs):
     
     for defence_layer, defence_module in defence_config['defences'].items():
+        print(f'Unmounting candidate defender at layer {defence_layer}...')
         if 'GATE' in kwargs['defence_strategy']:
             model.model.layers[defence_layer].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['GATE'][defence_layer])
         if 'UP' in kwargs['defence_strategy']:
@@ -1649,7 +1659,8 @@ def evolve_defence_config(model, attack_config, attacked_model, prev_defence_con
     defence_config['dataset_size'] = prev_defence_config['dataset_size'] + 20 
     if defence_config['dataset_size'] > kwargs['max_red_teaming_dataset_size']:
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
-    defence_config['epochs'] = prev_defence_config['epochs'] + 50
+    # we continue training for 100 more epochs...
+    defence_config['epochs'] = 100
     return defence_config
 
 

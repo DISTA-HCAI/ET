@@ -50,9 +50,6 @@ baseline: false
 # Save model after absortion
 save: false
 
-# Do not absorb defences
-memory_less: false
-
 # In case local defence fails, spread defence over more blocks
 multiblock_defences: false
 

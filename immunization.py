@@ -141,6 +141,9 @@ def main(cfg: DictConfig):
                 defence_succeeded = False
                                 
                 for inner_defence_round in range(max_defence_rounds):
+
+                    kwargs['first_inner_defence_round'] = inner_defence_round == 0
+
                     kwargs['timestep'] += 1
 
                     # train a defensive module!
@@ -163,10 +166,8 @@ def main(cfg: DictConfig):
                     if is_successful_defence(defence_config, kwargs): 
                         if kwargs['verbose']: print('Defence succeded! Relative Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'] ,'\n')
                         
-                        # Are we absorbing defences on the go?
-                        if not kwargs['memory_less']:
-                            model = absorb_defender_adaptor(model, defence_config, kwargs)
-                            logging_dict['wandb_run'].log({'Absorbed defences at layer': layer, STEP_LABEL: kwargs['timestep']})
+                        # already absorbed defences!
+                        logging_dict['wandb_run'].log({'Absorbed defences at layer': layer, STEP_LABEL: kwargs['timestep']})
                         
                         # Shall we save our defensive modules?
                         if kwargs['save']:
@@ -187,6 +188,9 @@ def main(cfg: DictConfig):
                 if not defence_succeeded:  
                     print(f'Failed to find a defence for last attack at layer {layer}')
                     # pprint_attack_config(attack_config)
+
+                    model = reset_defended_module(model, defence_config, kwargs)
+                    
                     log_immunization(
                         layer, 
                         False, 
