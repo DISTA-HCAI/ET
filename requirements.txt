@@ -2,9 +2,11 @@
 # do not upgrade:
 datasets==2.17.0
 transformers==4.45.1
-torch==2.3.0
+
 
 # upgrade and check:
+torch>=2.5.1  # If you use torch > 2.3.0, then make sure you uninstall deepspeed.
+nnsight>=0.3.7
 wandb>=0.18.5
 huggingface-hub>=0.26.2
 tokenizers>=0.20.1
