@@ -187,9 +187,9 @@ def main(cfg: DictConfig):
                 # Did we fail to defent against this attack given a defence budget?
                 if not defence_succeeded:  
                     print(f'Failed to find a defence for last attack at layer {layer}')
-                    # pprint_attack_config(attack_config)
-
-                    model = reset_defended_module(model, defence_config, kwargs)
+                    
+                    if max_defence_rounds > 0:
+                        model = reset_defended_module(model, defence_config, kwargs)
                     
                     log_immunization(
                         layer, 
