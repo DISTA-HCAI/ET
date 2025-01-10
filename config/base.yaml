@@ -8,7 +8,10 @@ model_name_or_path: meta-llama/Meta-Llama-3-8B-Instruct
 # The baseline model's lora adaptor (if any)
 lora_adaptor: ""
 
-# The safety evaluation lLM
+# The safety evaluation strategy:
+eval_safety_model: llama_guard   # can be llama_guard or perspective_api
+
+# If safety eval strategy is llama_guard, then this indicates the precise llama guard model for safety evaluation 
 eval_model: meta-llama/Meta-Llama-Guard-2-8B
 
 # Cache directory for model's weights

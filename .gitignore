@@ -5,6 +5,7 @@ wandb
 __pycache__
 media
 outputs
+.env
 # our stuff
 experiments3.sh
 .vscode/settings.json

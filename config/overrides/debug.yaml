@@ -1,4 +1,5 @@
 model_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+# eval_safety_model: perspective_api
 eval_model: meta-llama/Llama-Guard-3-1B
 verbose : true 
 init_attack_prompts: 10
