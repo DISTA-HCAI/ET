@@ -6,6 +6,7 @@ transformers==4.45.1
 
 # upgrade and check:
 torch>=2.5.1  # If you use torch > 2.3.0, then make sure you uninstall deepspeed.
+torchvision>=0.20.1
 nnsight>=0.3.7
 wandb>=0.18.5
 huggingface-hub>=0.26.2
