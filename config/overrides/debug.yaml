@@ -5,7 +5,6 @@ verbose : true
 init_attack_prompts: 10
 init_defence_prompts: 20
 init_eval_safety_prompts: 2
-init_eval_performance_prompts: 2
 performance_batches: 2
 min_toxicity_increase_factor: 0.0
 min_performance_percentage_attack: 0.0
