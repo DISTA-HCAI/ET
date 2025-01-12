@@ -80,9 +80,6 @@ train_red_teaming_label_col: target
 # Column name for input prompts in evaluation dataset
 test_red_teaming_input_col: Behavior
 
-# Initial Number of prompts for performance evaluation
-init_eval_performance_prompts: 50
-
 # Initial Number of prompts for safety evaluation
 init_eval_safety_prompts: 50
 
@@ -95,7 +92,7 @@ template: llama3_assistant
 # Maximum sequence length for model inputs
 max_seq_len: 8194
 
-# Number of batches for the INITIAL performance evaluation
+# Number of batches for performance evaluation
 performance_batches: 30
 
 # Initial Number of prompts for attacks

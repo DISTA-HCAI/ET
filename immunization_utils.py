@@ -777,7 +777,7 @@ def init_custom_defence_config(model, attack_config, attacked_model, defences, k
     defence_config['safety'] = 0
     defence_config['performance'] = 0
     defence_config['safety_eval_dataset_size'] = kwargs['init_eval_safety_prompts']
-    defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts']
+    # defence_config['performance_eval_dataset_size'] = kwargs['init_eval_performance_prompts']  # TODO use this!
     defence_config['regularization_coefficient'] = kwargs['defence_reg_coeff']
 
     return defence_config
