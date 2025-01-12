@@ -95,7 +95,7 @@ template: llama3_assistant
 # Maximum sequence length for model inputs
 max_seq_len: 8194
 
-# Number of batches for performance evaluation
+# Number of batches for the INITIAL performance evaluation
 performance_batches: 30
 
 # Initial Number of prompts for attacks

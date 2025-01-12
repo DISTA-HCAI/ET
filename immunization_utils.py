@@ -230,7 +230,7 @@ def initialize(args):
         eval_model,
         eval_tokenizer,
         safety_eval_data,
-        args.init_eval_performance_prompts,
+        args.init_eval_safety_prompts,
         logging_dict,
         False,
         'init',
