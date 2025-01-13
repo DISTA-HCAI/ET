@@ -84,7 +84,9 @@ test_red_teaming_input_col: Behavior
 init_eval_safety_prompts: 50
 
 # Learning rate for training
-learning_rate: 0.004
+attack_learning_rate: 0.004
+
+defence_learning_rate: 0.0001
 
 # Template for prompt generation
 template: llama3_assistant
@@ -187,3 +189,7 @@ avg_multiple_vaccines: true
 
 # save immunised candidate to disk
 save_immunised: false
+
+lora_attn_rank: 2
+
+lora_attn_alpha: 1.0

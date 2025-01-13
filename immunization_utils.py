@@ -881,7 +881,7 @@ def reft_attack(
         output_dir="local_checkpoints/tmp_reft",  # TODO what to do here?
         overwrite_output_dir=True,
         per_device_train_batch_size=attack_config['batch_size'],
-        learning_rate=kwargs['learning_rate'],
+        learning_rate=kwargs['attack_learning_rate'],
         report_to="none",
         disable_tqdm=(not kwargs['tqdm']),
     )
@@ -1098,106 +1098,6 @@ def fro_norm_loss(input, target):
     return torch.norm(input- target)
 
 
-def split_list(lst, n):
-    return [lst[i:i + n] for i in range(0, len(lst), n)]
-
-
-def update_causal_mask(
-        model,
-        attention_mask: torch.Tensor,
-        input_tensor: torch.Tensor,
-        cache_position: torch.Tensor,
-        past_key_values: Cache,
-        output_attentions: bool,
-    ):
-        """
-        This code was copied and adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
-        """
-        if model.config._attn_implementation == "flash_attention_2":
-            if attention_mask is not None and 0.0 in attention_mask:
-                return attention_mask
-            return None
-
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        using_static_cache = isinstance(past_key_values, StaticCache)
-
-        if model.config._attn_implementation == "sdpa" and not using_static_cache and not output_attentions:
-            if AttentionMaskConverter._ignore_causal_mask_sdpa(
-                attention_mask,
-                inputs_embeds=input_tensor,
-                past_key_values_length=past_seen_tokens,
-                is_training=True,  # we have changed the code here make as is the model were training 
-            ):
-                return None
-
-        dtype, device = input_tensor.dtype, input_tensor.device
-        min_dtype = torch.finfo(dtype).min
-        sequence_length = input_tensor.shape[1]
-        if using_static_cache:
-            target_length = past_key_values.get_max_length()
-        else:
-            target_length = (
-                attention_mask.shape[-1]
-                if isinstance(attention_mask, torch.Tensor)
-                else past_seen_tokens + sequence_length + 1
-            )
-
-        if attention_mask is not None and attention_mask.dim() == 4:
-            # in this case we assume that the mask comes already in inverted form and requires no inversion or slicing
-            if attention_mask.max() != 0:
-                raise ValueError("Custom 4D attention mask should be passed in inverted form with max==0`")
-            causal_mask = attention_mask
-        else:
-            causal_mask = torch.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
-            )
-            if sequence_length != 1:
-                causal_mask = torch.triu(causal_mask, diagonal=1)
-            causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-            causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
-            if attention_mask is not None:
-                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-                mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-                padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                    padding_mask, min_dtype
-                )
-        if (
-            model.config._attn_implementation == "sdpa"
-            and attention_mask is not None
-            and attention_mask.device.type == "cuda"
-            and not output_attentions
-        ):
-
-            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-        return causal_mask
-
-
-def get_layer_causal_mask(model, input_ids, cache_position, attention_mask):
-    inputs_embeds = model.model.embed_tokens(input_ids)
-    return update_causal_mask(
-        model, 
-        attention_mask, 
-        inputs_embeds,
-        cache_position,
-        DynamicCache.from_legacy_cache(None), 
-        False)
-
-
-def generate_causal_mask(input_tensor, kwargs):
-
-    dtype = torch.bfloat16
-    device = kwargs['device']
-    min_dtype = torch.finfo(dtype).min
-    seq_len = input_tensor.shape[1]
-    mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
-    mask = mask.float().masked_fill(mask == 0, min_dtype).masked_fill(mask == 1, float(0.0))
-    mask = mask.unsqueeze(0).unsqueeze(0)
-    return mask.repeat(input_tensor.shape[0],1,1,1).to(dtype).to(kwargs['device'])
-
-
 def mlp_immunisation_step(
     batch,
     intervenable_model,
@@ -1242,7 +1142,7 @@ def mlp_immunisation_step(
             orig_mlp_inputs)
 
         # Neutralisation:
-        neutralisation_mlp_outs = defensive_block.intervened_forward(
+        neutralisation_mlp_outs = defensive_block.interveened_forward(
             corrupt_mlp_inputs)
 
         def_loss += defence_criterion(
@@ -1250,7 +1150,7 @@ def mlp_immunisation_step(
             target=bsl_mlp_outputs)
 
         # Stability:
-        stability_mlp_outputs = defensive_block.intervened_forward(
+        stability_mlp_outputs = defensive_block.interveened_forward(
             orig_mlp_inputs)
 
         reg_loss += defence_criterion(
@@ -1266,6 +1166,7 @@ def block_immunisation_step(
     intervenable_model,
     defence_config,
     defence_criterion,
+    preinputs_catcher,
     kwargs):
     
     reg_loss = 0
@@ -1284,14 +1185,10 @@ def block_immunisation_step(
                     'attention_mask': batch['attention_mask']},
             unit_locations={"base" : intervention_locations})
 
-        # causal attention mask computation. we have two options here:
-        if kwargs['causal_mask'] == 'llama':
-            causal_mask = get_layer_causal_mask(
-                intervenable_model.model, 
-                batch['input_ids'], 
-                position_ids, 
-                batch['attention_mask'])
-        else: causal_mask = generate_causal_mask(batch['input_ids'], kwargs)
+        pre_inputs_dict = preinputs_catcher.get_inputs_dict(
+            batch['input_ids'],
+            batch['attention_mask'])
+
 
         batch_size = defence_config['batch_size']
         intervention_outputs = [fella.unsqueeze(0) for fella in intervention_outputs[0][1]]
@@ -1311,38 +1208,71 @@ def block_immunisation_step(
         defence_layer, defence_module = defence_tuples[defence_idx]
         defensive_block = defence_module['defence_module']
 
-        safe_block_output =  defensive_block(
+        _ =  defensive_block(
             h,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
+            attention_mask=pre_inputs_dict['causal_mask'],
+            position_ids=pre_inputs_dict['position_ids'],
+            past_key_value=pre_inputs_dict['past_key_values'],
+            output_attentions=pre_inputs_dict['output_attentions'],
+            use_cache=pre_inputs_dict['use_cache'],
+            cache_position=pre_inputs_dict['cache_position'],
+            position_embeddings=pre_inputs_dict['position_embeddings'])[0]
+
+        safe_pre_mlp_residual = defensive_block.pre_mlp_res_cache
+        safe_mlp_output = defensive_block.mlp_output_cache
 
         # neutralisation
 
         # We run this forward pass just to capture activations in the places we care...
-        _ = defensive_block.intervened_forward(
+        _ = defensive_block.interveened_forward(
             h_plus_i,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
+            attention_mask=pre_inputs_dict['causal_mask'],
+            position_ids=pre_inputs_dict['position_ids'],
+            past_key_value=pre_inputs_dict['past_key_values'],
+            output_attentions=pre_inputs_dict['output_attentions'],
+            use_cache=pre_inputs_dict['use_cache'],
+            cache_position=pre_inputs_dict['cache_position'],
+            position_embeddings=pre_inputs_dict['position_embeddings'])[0]
+
         # get the activations...
         infected_pre_mlp_residual = defensive_block.pre_mlp_res_cache
         infected_mlp_output = defensive_block.mlp_output_cache
 
         def_loss += defence_criterion(
+            input=infected_pre_mlp_residual,
+            target=safe_pre_mlp_residual)
+
+
+        def_loss += defence_criterion(
             input=infected_mlp_output,
-            target=safe_block_output - infected_pre_mlp_residual)
+            target=safe_mlp_output)
+
+        
 
         # stability:
-        _ = defensive_block.intervened_forward(
+        _ = defensive_block.interveened_forward(
             h,
-            attention_mask=causal_mask,
-            position_ids=position_ids)[0]
+            attention_mask=pre_inputs_dict['causal_mask'],
+            position_ids=pre_inputs_dict['position_ids'],
+            past_key_value=pre_inputs_dict['past_key_values'],
+            output_attentions=pre_inputs_dict['output_attentions'],
+            use_cache=pre_inputs_dict['use_cache'],
+            cache_position=pre_inputs_dict['cache_position'],
+            position_embeddings=pre_inputs_dict['position_embeddings'])[0]
+
         # get the activations...
         imm_pre_mlp_residual = defensive_block.pre_mlp_res_cache
         imm_mlp_output = defensive_block.mlp_output_cache
 
+
+        reg_loss += defence_criterion(
+            input=imm_pre_mlp_residual,
+            target=safe_pre_mlp_residual)
+
         reg_loss += defence_criterion(
             input=imm_mlp_output,
-            target=safe_block_output - imm_pre_mlp_residual)
+            target=safe_mlp_output)
+
 
     return reg_loss, def_loss
 
@@ -1352,7 +1282,8 @@ def defence_training_loop(
     defence_dataloader, 
     intervenable_model, 
     defence_criterion, 
-    defence_optimizers, 
+    defence_optimizers,
+    preinputs_catcher, 
     kwargs):
     
     if kwargs['verbose']: print('Training defence...')
@@ -1381,6 +1312,7 @@ def defence_training_loop(
                     intervenable_model,
                     defence_config,
                     defence_criterion,
+                    preinputs_catcher,
                     kwargs)
 
             else: 
@@ -1483,6 +1415,7 @@ def custom_defence(
     logging_dict,
     kwargs):
 
+    preinputs_catcher = LlamaInputsCatcher(model.model)
     # intervenable model is used to retrieve the training inputs
     intervenable_model = pyvene.IntervenableModel(defence_config['intervenable_config'], model)
     intervenable_model.disable_model_gradients()
@@ -1496,6 +1429,7 @@ def custom_defence(
         intervenable_model, 
         defence_criterion, 
         defence_optimizers,
+        preinputs_catcher,
         kwargs)
 
     logging_dict['wandb_run'].log(
@@ -1559,7 +1493,7 @@ def get_defence_optimizers(defence_config, kwargs):
             defence_module = defence_modules_dict['defence_module']
             # all loras are used for defence + reg. (could lead to gradient conflict)
             parameters_for_defence_optimizer.extend([param for param in defence_module.parameters() if param.requires_grad])
-        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']), None]
+        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['defence_learning_rate']), None]
     
     else:
         assert kwargs['defence_regularization'] == 'compound' and \
@@ -1569,20 +1503,40 @@ def get_defence_optimizers(defence_config, kwargs):
             
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_module = defence_modules_dict['defence_module']
-            # gate and up projections are used for defence:
+            
             for named_param in defence_module.named_parameters():
+                # gate and up projections are used for defence:
                 if named_param[0] in [
                     module_prefix+'gate_A.weight', 
                     module_prefix+'gate_B.weight', 
                     module_prefix+'up_A.weight', 
                     module_prefix+'up_B.weight']:\
                     parameters_for_defence_optimizer.append(named_param[1])
+                # down projection is used for reg.
                 elif named_param[0] in [
                     module_prefix+'down_A.weight', 
                     module_prefix+'down_B.weight']:
                     parameters_for_regularization_optimizer.append(named_param[1])
-        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['learning_rate']),
-                torch.optim.Adam(parameters_for_regularization_optimizer, lr=kwargs['learning_rate'])]
+
+                if kwargs["init_attack_intervention_places"] == "block":
+
+                    # attention query and value are used for defence:
+                    if named_param[0] in [
+                        'self_attn.interveened_q_proj.lora_A.weight', 
+                        'self_attn.interveened_v_proj.lora_A.weight', 
+                        'self_attn.interveened_q_proj.lora_B.weight', 
+                        'self_attn.interveened_v_proj.lora_B.weight']:
+                        parameters_for_defence_optimizer.append(named_param[1])
+                    # attention key and output is used for reg.
+                    elif named_param[0] in [
+                        'self_attn.interveened_k_proj.lora_A.weight', 
+                        'self_attn.interveened_o_proj.lora_A.weight', 
+                        'self_attn.interveened_k_proj.lora_B.weight', 
+                        'self_attn.interveened_o_proj.lora_B.weight']:
+                        parameters_for_regularization_optimizer.append(named_param[1])
+                
+        return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['defence_learning_rate']),
+                torch.optim.Adam(parameters_for_regularization_optimizer, lr=kwargs['defence_learning_rate'])]
     
 
 def get_defence_dataloader(model, tokenizer, defence_config, attack_data_dict):
