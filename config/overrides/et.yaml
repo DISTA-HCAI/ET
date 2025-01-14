@@ -1,0 +1,14 @@
+verbose: true
+logging: true
+torch_seed: 33
+save: true
+min_safety_percentage: 0.98
+init_defence_epochs: 150
+init_defence_batch_size: 16
+init_defence_prompts: 520
+max_defence_rounds: 4
+max_attack_rounds: 4
+max_immunization_rounds: 5
+tqdm: true
+run_name: et
+defence_regularization: simple
