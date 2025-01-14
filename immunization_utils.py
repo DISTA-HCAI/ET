@@ -1223,7 +1223,8 @@ def block_immunisation_step(
             start_idx:
             start_idx + batch_size])
 
-        h_plus_i = corruption_module(h)
+        h_plus_i = corruption_module(h).detach()
+        i = h_plus_i - h.detach()
     
         defence_layer, defence_module = defence_tuples[defence_idx]
         defensive_block = defence_module['defence_module']
@@ -1238,8 +1239,9 @@ def block_immunisation_step(
             cache_position=pre_inputs_dict['cache_position'],
             position_embeddings=pre_inputs_dict['position_embeddings'])[0]
 
-        safe_pre_mlp_residual = defensive_block.pre_mlp_res_cache
-        safe_mlp_output = defensive_block.mlp_output_cache
+        safe_attn_output = defensive_block.self_attn_output_cache.detach()
+        safe_pre_mlp_residual = defensive_block.pre_mlp_res_cache.detach()
+        safe_mlp_output = defensive_block.mlp_output_cache.detach()
 
         # neutralisation
 
@@ -1255,21 +1257,14 @@ def block_immunisation_step(
             position_embeddings=pre_inputs_dict['position_embeddings'])[0]
 
         # get the activations...
+        infected_attn_output = defensive_block.self_attn_output_cache
         infected_pre_mlp_residual = defensive_block.pre_mlp_res_cache
         infected_mlp_output = defensive_block.mlp_output_cache
 
         def_loss += defence_criterion(
-            input=infected_pre_mlp_residual,
-            target=safe_pre_mlp_residual,
+            input=infected_attn_output + i,
+            target=safe_attn_output,
             **kwargs)
-
-
-        def_loss += defence_criterion(
-            input=infected_mlp_output,
-            target=safe_mlp_output,
-            **kwargs)
-
-        
 
         # stability:
         _ = defensive_block.interveened_forward(
@@ -1283,18 +1278,14 @@ def block_immunisation_step(
             position_embeddings=pre_inputs_dict['position_embeddings'])[0]
 
         # get the activations...
+        imm_attn_output = defensive_block.self_attn_output_cache
         imm_pre_mlp_residual = defensive_block.pre_mlp_res_cache
         imm_mlp_output = defensive_block.mlp_output_cache
 
 
         reg_loss += defence_criterion(
-            input=imm_pre_mlp_residual,
-            target=safe_pre_mlp_residual,
-            **kwargs)
-
-        reg_loss += defence_criterion(
-            input=imm_mlp_output,
-            target=safe_mlp_output,
+            input=imm_attn_output,
+            target=safe_attn_output,
             **kwargs)
 
 
@@ -1330,7 +1321,7 @@ def defence_training_loop(
         for batch_idx, batch in enumerate(defence_dataloader):
 
             if kwargs['init_attack_intervention_places'] == 'block':
-
+                
                 reg_loss, def_loss = block_immunisation_step(
                     batch,
                     intervenable_model,
@@ -1520,11 +1511,10 @@ def get_defence_optimizers(defence_config, kwargs):
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['defence_learning_rate']), None]
     
     else:
-        assert kwargs['defence_regularization'] == 'compound' and \
-            'GATE' in kwargs['defence_strategy'] and \
-            'UP' in kwargs['defence_strategy'] and \
-            'DOWN' in kwargs['defence_strategy'], 'Compound regularization needs defence strategy to be GATE_UP_DOWN'
-            
+        assert all(defence_strategy_component in kwargs['defence_strategy'] 
+                for defence_strategy_component in ['GATE', 'UP', 'DOWN', 'QUERY', 'KEY', 'VALUE', 'OUTPUT']), \
+            'Compound regularization needs defence strategy to contain GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT'
+
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_module = defence_modules_dict['defence_module']
             
@@ -1546,17 +1536,17 @@ def get_defence_optimizers(defence_config, kwargs):
 
                     # attention query and value are used for defence:
                     if named_param[0] in [
-                        'self_attn.interveened_q_proj.lora_A.weight', 
-                        'self_attn.interveened_v_proj.lora_A.weight', 
-                        'self_attn.interveened_q_proj.lora_B.weight', 
-                        'self_attn.interveened_v_proj.lora_B.weight']:
+                        'self_attn.interveened_q_proj.lora_A', 
+                        'self_attn.interveened_v_proj.lora_A', 
+                        'self_attn.interveened_q_proj.lora_B', 
+                        'self_attn.interveened_v_proj.lora_B']:
                         parameters_for_defence_optimizer.append(named_param[1])
                     # attention key and output is used for reg.
                     elif named_param[0] in [
-                        'self_attn.interveened_k_proj.lora_A.weight', 
-                        'self_attn.interveened_o_proj.lora_A.weight', 
-                        'self_attn.interveened_k_proj.lora_B.weight', 
-                        'self_attn.interveened_o_proj.lora_B.weight']:
+                        'self_attn.interveened_k_proj.lora_A', 
+                        'self_attn.interveened_o_proj.lora_A', 
+                        'self_attn.interveened_k_proj.lora_B', 
+                        'self_attn.interveened_o_proj.lora_B']:
                         parameters_for_regularization_optimizer.append(named_param[1])
                 
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['defence_learning_rate']),
@@ -1582,22 +1572,29 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
     if kwargs['first_inner_defence_round']:
         kwargs['cached_original_modules'] = {'UP': {},
                                             'GATE': {},
-                                            'DOWN': {}}
+                                            'DOWN': {},
+                                            'QUERY': {},
+                                            'KEY': {},
+                                            'VALUE': {},
+                                            'OUTPUT': {}}
 
     for defence_layer, defence_module in defence_config['defences'].items():
         
         defensive_block = defence_module['defence_module']
         
         if isinstance(defensive_block, LlamaBlockDefendor):
-            defensive_block = defensive_block.mlp
-        else: assert isinstance(defensive_block, CustomLlamaMLP), "Fatal Error!!"
+            defensive_block_mlp = defensive_block.mlp
+        else: 
+            assert isinstance(defensive_block, CustomLlamaMLP), "Fatal Error!!"
+            defensive_block_mlp = defensive_block
+
 
         if 'GATE' in kwargs['defence_strategy']:
             if kwargs['first_inner_defence_round']:
                 kwargs['cached_original_modules']['GATE'][defence_layer] = model.model.layers[defence_layer].mlp.gate_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
-                defensive_block.gate_B.weight, 
-                defensive_block.gate_A.weight)
+                defensive_block_mlp.gate_B.weight, 
+                defensive_block_mlp.gate_A.weight)
             model.model.layers[defence_layer].mlp.gate_proj.weight = torch.nn.Parameter(
                 model.model.layers[defence_layer].mlp.gate_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
@@ -1606,8 +1603,8 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
             if kwargs['first_inner_defence_round']:
                 kwargs['cached_original_modules']['UP'][defence_layer] = model.model.layers[defence_layer].mlp.up_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
-                defensive_block.up_B.weight, 
-                defensive_block.up_A.weight)
+                defensive_block_mlp.up_B.weight, 
+                defensive_block_mlp.up_A.weight)
             model.model.layers[defence_layer].mlp.up_proj.weight = torch.nn.Parameter(
                 model.model.layers[defence_layer].mlp.up_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
@@ -1616,12 +1613,53 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
             if kwargs['first_inner_defence_round']:
                 kwargs['cached_original_modules']['DOWN'][defence_layer] = model.model.layers[defence_layer].mlp.down_proj.weight.clone()
             defensive_lora_adaptor = torch.matmul(
-                defensive_block.down_B.weight, 
-                defensive_block.down_A.weight)
+                defensive_block_mlp.down_B.weight, 
+                defensive_block_mlp.down_A.weight)
             model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(
                 model.model.layers[defence_layer].mlp.down_proj.weight.clone() + 
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
+        if isinstance(defensive_block, LlamaBlockDefendor):
+
+            if 'QUERY' in kwargs['defence_strategy']:
+                if kwargs['first_inner_defence_round']:
+                    kwargs['cached_original_modules']['QUERY'][defence_layer] = model.model.layers[defence_layer].self_attn.q_proj.weight.clone()
+                defensive_lora_adaptor = torch.matmul(
+                    defensive_block.self_attn.interveened_q_proj.lora_A, 
+                    defensive_block.self_attn.interveened_q_proj.lora_B)
+                model.model.layers[defence_layer].self_attn.q_proj.weight = torch.nn.Parameter(
+                    model.model.layers[defence_layer].self_attn.q_proj.weight.clone() + 
+                    (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+
+            if 'KEY' in kwargs['defence_strategy']:
+                if kwargs['first_inner_defence_round']:
+                    kwargs['cached_original_modules']['KEY'][defence_layer] = model.model.layers[defence_layer].self_attn.k_proj.weight.clone()
+                defensive_lora_adaptor = torch.matmul(
+                    defensive_block.self_attn.interveened_k_proj.lora_A,
+                    defensive_block.self_attn.interveened_k_proj.lora_B)
+                model.model.layers[defence_layer].self_attn.k_proj.weight = torch.nn.Parameter(
+                    model.model.layers[defence_layer].self_attn.k_proj.weight.clone() + 
+                    (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+
+            if 'VALUE' in kwargs['defence_strategy']:
+                if kwargs['first_inner_defence_round']:
+                    kwargs['cached_original_modules']['VALUE'][defence_layer] = model.model.layers[defence_layer].self_attn.v_proj.weight.clone()
+                defensive_lora_adaptor = torch.matmul(
+                    defensive_block.self_attn.interveened_v_proj.lora_A,
+                    defensive_block.self_attn.interveened_v_proj.lora_B)
+                model.model.layers[defence_layer].self_attn.v_proj.weight = torch.nn.Parameter(
+                    model.model.layers[defence_layer].self_attn.v_proj.weight.clone() + 
+                    (defence_config['absortion_scaling'] * defensive_lora_adaptor))
+
+            if 'OUTPUT' in kwargs['defence_strategy']:
+                if kwargs['first_inner_defence_round']:
+                    kwargs['cached_original_modules']['OUTPUT'][defence_layer] = model.model.layers[defence_layer].self_attn.o_proj.weight.clone()
+                defensive_lora_adaptor = torch.matmul(
+                    defensive_block.self_attn.interveened_o_proj.lora_A,
+                    defensive_block.self_attn.interveened_o_proj.lora_B)
+                model.model.layers[defence_layer].self_attn.o_proj.weight = torch.nn.Parameter(
+                    model.model.layers[defence_layer].self_attn.o_proj.weight.clone() + 
+                    (defence_config['absortion_scaling'] * defensive_lora_adaptor))
         
     return model
 
@@ -1642,6 +1680,14 @@ def reset_defended_module(model, defence_config, kwargs):
             model.model.layers[defence_layer].mlp.up_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['UP'][defence_layer])
         if 'DOWN' in kwargs['defence_strategy']:
             model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['DOWN'][defence_layer])
+        if 'QUERY' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer].self_attn.q_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['QUERY'][defence_layer])
+        if 'KEY' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer].self_attn.k_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['KEY'][defence_layer])
+        if 'VALUE' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer].self_attn.v_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['VALUE'][defence_layer])
+        if 'OUTPUT' in kwargs['defence_strategy']:
+            model.model.layers[defence_layer].self_attn.o_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['OUTPUT'][defence_layer])
 
     return model
 
