@@ -127,6 +127,7 @@ class CustomLlamaAttention(nn.Module):
     def __init__(self, originalmodule: LlamaAttention, kwargs):
         super().__init__()
         config = originalmodule.config
+        self.intervention_strategy = kwargs['defence_strategy']
         self.config = originalmodule.config
         self.layer_idx = originalmodule.layer_idx
         self.head_dim = originalmodule.head_dim
@@ -140,10 +141,14 @@ class CustomLlamaAttention(nn.Module):
         self.v_proj = originalmodule.v_proj
         self.o_proj = originalmodule.o_proj
         
-        self.interveened_q_proj = LoRALayer(originalmodule.q_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
-        self.interveened_k_proj = LoRALayer(originalmodule.k_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
-        self.interveened_v_proj = LoRALayer(originalmodule.v_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
-        self.interveened_o_proj = LoRALayer(originalmodule.o_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
+        if 'QUERY' in self.intervention_strategy:
+            self.interveened_q_proj = LoRALayer(originalmodule.q_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
+        if 'KEY' in self.intervention_strategy:
+            self.interveened_k_proj = LoRALayer(originalmodule.k_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
+        if 'VALUE' in self.intervention_strategy:
+            self.interveened_v_proj = LoRALayer(originalmodule.v_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
+        if 'OUTPUT' in self.intervention_strategy:
+            self.interveened_o_proj = LoRALayer(originalmodule.o_proj, kwargs['lora_attn_rank'], kwargs['lora_attn_alpha'])
 
         for param in list(self.q_proj.parameters()) + \
                         list(self.k_proj.parameters()) + \
@@ -213,9 +218,20 @@ class CustomLlamaAttention(nn.Module):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
-        query_states = self.interveened_q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.interveened_k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.interveened_v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        if 'QUERY' in self.intervention_strategy:
+            query_states = self.interveened_q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        else:
+            query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        if 'KEY' in self.intervention_strategy:
+            key_states = self.interveened_k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        else:
+            key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        if 'VALUE' in self.intervention_strategy:
+            value_states = self.interveened_v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        else:
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -251,7 +267,12 @@ class CustomLlamaAttention(nn.Module):
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = self.interveened_o_proj(attn_output)
+
+        if 'OUTPUT' in self.intervention_strategy:
+            attn_output = self.interveened_o_proj(attn_output)
+        else:
+            attn_output = self.o_proj(attn_output)
+            
         return attn_output, attn_weights
 
 
@@ -274,6 +295,7 @@ class LlamaBlockDefendor(nn.Module):
 
         self.pre_mlp_res_cache = None
         self.mlp_output_cache = None
+        self.self_attn_output_cache = None
 
     def forward(
         self,
@@ -296,7 +318,7 @@ class LlamaBlockDefendor(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
+        attn_output, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -308,7 +330,9 @@ class LlamaBlockDefendor(nn.Module):
             **kwargs,
         )
 
-        hidden_states = residual + hidden_states
+        self.self_attn_output_cache = attn_output
+
+        hidden_states = residual + attn_output
 
         # Fully Connected
         residual = hidden_states
@@ -348,7 +372,7 @@ class LlamaBlockDefendor(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn.interveened_forward(
+        attn_output, self_attn_weights = self.self_attn.interveened_forward(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -360,7 +384,9 @@ class LlamaBlockDefendor(nn.Module):
             **kwargs,
         )
         
-        hidden_states = residual + hidden_states
+        self.self_attn_output_cache = attn_output
+
+        hidden_states = residual + attn_output
 
         # Fully Connected
         residual = hidden_states
