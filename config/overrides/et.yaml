@@ -10,5 +10,5 @@ max_defence_rounds: 4
 max_attack_rounds: 4
 max_immunization_rounds: 5
 tqdm: true
-run_name: et
 defence_regularization: simple
+defence_strategy: QUERY_KEY_VALUE_OUTPUT
