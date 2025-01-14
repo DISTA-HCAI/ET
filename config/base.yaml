@@ -139,6 +139,9 @@ init_defence_absortion_scaling: 1.0
 # Regularization coefficient for defence
 defence_reg_coeff: 1.0
 
+# When a defence failes, the reg coefficient is multiplied by this factor
+reg_multiplier_defence_evolution: 1.0
+
 # Initial Criterion for defence can be fro or mse or fro_cos
 init_defence_criterion: fro 
 

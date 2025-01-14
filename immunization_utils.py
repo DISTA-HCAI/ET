@@ -25,7 +25,6 @@ from copy import deepcopy  # Use deepcopy to avoid modifying the original templa
 from peft import PeftModel
 from googleapiclient import discovery
 import json
-from vllm import LLM, SamplingParams
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -1677,7 +1676,7 @@ def evolve_defence_config(model, attack_config, attacked_model, prev_defence_con
     defence_config['epochs'] = 100
 
     # many defences fail because they go to deep in the defensive criterion and the stability is low...
-    defence_config['regularization_coefficient'] = prev_defence_config['regularization_coefficient'] * 3
+    defence_config['regularization_coefficient'] = prev_defence_config['regularization_coefficient'] * kwargs['reg_multiplier_defence_evolution']
     return defence_config
 
 
