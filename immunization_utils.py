@@ -351,6 +351,9 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
     # Calculate number of samples
     nsamples = testenc.numel() // seqlen
     nsamples = min(nsamples, kwargs['performance_batches'])
+
+    if isReftModel:
+        nsamples = 2 # we do not care about performance of attacks for now...
     ranger = range
     if kwargs['verbose']:
         print(f"Evaluating perplexity...")
