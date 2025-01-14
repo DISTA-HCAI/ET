@@ -3,6 +3,7 @@ import transformers
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 import sys
 sys.path.append('/home/jovyan/pyreft/pyvene')
 sys.path.append('/home/jovyan/pyreft')
@@ -11,7 +12,7 @@ import pyvene
 import pandas as pd
 import copy
 import datasets
-from CustomLlamaMLP import *
+from custom_modelling_llama import *
 from tqdm import tqdm, trange 
 from pprint import pprint
 import wandb
@@ -24,6 +25,7 @@ from copy import deepcopy  # Use deepcopy to avoid modifying the original templa
 from peft import PeftModel
 from googleapiclient import discovery
 import json
+from vllm import LLM, SamplingParams
 
 from pyreft.interventions import (
         NoreftIntervention,
@@ -984,7 +986,7 @@ def eval_safety(
                 isReftModel,
                 kwargs
             )
-           
+        
             if kwargs['eval_safety_model'] == 'llama_guard':
                 
                 data_tuple = [{"role": "user",
@@ -1088,16 +1090,30 @@ def deterministic_query(
 def get_defence_loss_criterion(defence_config):
     """
     """
-    
-    assert defence_config["defence_criterion"] in ['fro','mse']  # TODO support other losses?
+    assert defence_config["defence_criterion"] in ['fro','mse', 'fro_cos']  # TODO support other losses?
 
     if defence_config["defence_criterion"] == "fro":
         return fro_norm_loss
     elif defence_config["defence_criterion"] == "mse":
         return torch.nn.MSELoss()
+    elif defence_config["defence_criterion"] == "fro_cos":
+        return fro_plus_cos_norm_loss
 
 
-def fro_norm_loss(input, target):
+def fro_plus_cos_norm_loss(input, target, **kwargs):
+    alpha = kwargs.get('frobenious_norm_scaling_factor', 1.0)
+    beta = kwargs.get('cosine_similarity_scaling_factor', 1.0)
+    
+    frobenius_loss = torch.norm(target - input, p='fro') ** 2
+    # Cosine similarity (per token)  Shape: [batch_size, num_tokens]
+    cosine_similarity = F.cosine_similarity(input, target, dim=-1)
+    cosine_loss = 1 - cosine_similarity.mean()  # Average over all tokens and batch
+    # Combine the two losses
+    total_loss = alpha * frobenius_loss + beta * cosine_loss
+    return total_loss
+
+
+def fro_norm_loss(input, target, **kwargs):
     return torch.norm(input- target)
 
 
@@ -1150,7 +1166,8 @@ def mlp_immunisation_step(
 
         def_loss += defence_criterion(
             input=neutralisation_mlp_outs,
-            target=bsl_mlp_outputs)
+            target=bsl_mlp_outputs,
+            **kwargs)
 
         # Stability:
         stability_mlp_outputs = defensive_block.interveened_forward(
@@ -1158,7 +1175,8 @@ def mlp_immunisation_step(
 
         reg_loss += defence_criterion(
             input=stability_mlp_outputs,
-            target=bsl_mlp_outputs)
+            target=bsl_mlp_outputs,
+            **kwargs)
         
 
     return reg_loss, def_loss
@@ -1243,12 +1261,14 @@ def block_immunisation_step(
 
         def_loss += defence_criterion(
             input=infected_pre_mlp_residual,
-            target=safe_pre_mlp_residual)
+            target=safe_pre_mlp_residual,
+            **kwargs)
 
 
         def_loss += defence_criterion(
             input=infected_mlp_output,
-            target=safe_mlp_output)
+            target=safe_mlp_output,
+            **kwargs)
 
         
 
@@ -1270,11 +1290,13 @@ def block_immunisation_step(
 
         reg_loss += defence_criterion(
             input=imm_pre_mlp_residual,
-            target=safe_pre_mlp_residual)
+            target=safe_pre_mlp_residual,
+            **kwargs)
 
         reg_loss += defence_criterion(
             input=imm_mlp_output,
-            target=safe_mlp_output)
+            target=safe_mlp_output,
+            **kwargs)
 
 
     return reg_loss, def_loss
@@ -1653,6 +1675,9 @@ def evolve_defence_config(model, attack_config, attacked_model, prev_defence_con
         defence_config['dataset_size'] = kwargs['max_red_teaming_dataset_size']
     # we continue training for 100 more epochs...
     defence_config['epochs'] = 100
+
+    # many defences fail because they go to deep in the defensive criterion and the stability is low...
+    defence_config['regularization_coefficient'] = prev_defence_config['regularization_coefficient'] * 3
     return defence_config
 
 
