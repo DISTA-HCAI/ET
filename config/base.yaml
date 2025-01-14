@@ -139,8 +139,12 @@ init_defence_absortion_scaling: 1.0
 # Regularization coefficient for defence
 defence_reg_coeff: 1.0
 
-# Initial Criterion for defence
-init_defence_criterion: fro
+# Initial Criterion for defence can be fro or mse or fro_cos
+init_defence_criterion: fro 
+
+# these are applied only if defence loss criterion is fro_cos
+frobenious_norm_scaling_factor: 0.3
+cosine_similarity_scaling_factor: 0.7
 
 # Dimension for low-rank attack
 init_low_rank_attack_dimension: 2
