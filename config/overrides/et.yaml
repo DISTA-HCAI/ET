@@ -11,4 +11,6 @@ max_attack_rounds: 4
 max_immunization_rounds: 5
 tqdm: true
 defence_regularization: simple
-defence_strategy: QUERY_KEY_VALUE_OUTPUT
+defence_strategy: GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT
+reg_multiplier_defence_evolution: 10
+defence_reg_coeff: 1.0
