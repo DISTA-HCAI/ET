@@ -160,7 +160,7 @@ def mount_vaccines(model, kwargs):
             defenders_per_layer = defaultdict(list)
             for defender_adaptor in matching_filenames:
                 layer = int(defender_adaptor.split('layer')[1].split('_')[0])
-                defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/ET/'+defender_adaptor))
+                defenders_per_layer[layer].append(torch.load(kwargs['cache_dir']+'/ET/'+defender_adaptor, weights_only=True))
             for layer, list_of_layer_dicts in defenders_per_layer.items():
                 if kwargs['avg_multiple_vaccines']:
                     print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
@@ -1262,9 +1262,17 @@ def block_immunisation_step(
         infected_mlp_output = defensive_block.mlp_output_cache
 
         def_loss += defence_criterion(
-            input=infected_attn_output + i,
-            target=safe_attn_output,
+            input=infected_pre_mlp_residual,
+            target=safe_pre_mlp_residual,
             **kwargs)
+
+
+        def_loss += defence_criterion(
+            input=infected_mlp_output,
+            target=safe_mlp_output,
+            **kwargs)
+
+        
 
         # stability:
         _ = defensive_block.interveened_forward(
@@ -1284,8 +1292,13 @@ def block_immunisation_step(
 
 
         reg_loss += defence_criterion(
-            input=imm_attn_output,
-            target=safe_attn_output,
+            input=imm_pre_mlp_residual,
+            target=safe_pre_mlp_residual,
+            **kwargs)
+
+        reg_loss += defence_criterion(
+            input=imm_mlp_output,
+            target=safe_mlp_output,
             **kwargs)
 
 
@@ -1511,9 +1524,17 @@ def get_defence_optimizers(defence_config, kwargs):
         return [torch.optim.Adam(parameters_for_defence_optimizer, lr=kwargs['defence_learning_rate']), None]
     
     else:
-        assert all(defence_strategy_component in kwargs['defence_strategy'] 
-                for defence_strategy_component in ['GATE', 'UP', 'DOWN', 'QUERY', 'KEY', 'VALUE', 'OUTPUT']), \
-            'Compound regularization needs defence strategy to contain GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT'
+        if kwargs["init_attack_intervention_places"] == "mlp":
+            assert all(defence_strategy_component in kwargs['defence_strategy'] 
+                    for defence_strategy_component in ['GATE', 'UP', 'DOWN']), \
+                'Compound regularization for mlp defenses needs defence strategy to contain at least the  GATE UP and DOWN components'
+
+        if kwargs["init_attack_intervention_places"] == "block":
+            assert (all(defence_strategy_component in kwargs['defence_strategy'] 
+                    for defence_strategy_component in ['GATE', 'UP', 'DOWN']) or 
+                    all(defence_strategy_component in kwargs['defence_strategy'] 
+                    for defence_strategy_component in ['QUERY', 'KEY', 'VALUE', 'OUTPUT'])), \
+                'Compound regularization for block defenses needs defence strategy to contain at least the  GATE UP and DOWN components or the  QUERY KEY VALUE and OUTPUT components'
 
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_module = defence_modules_dict['defence_module']
