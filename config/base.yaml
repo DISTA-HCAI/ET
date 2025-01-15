@@ -116,7 +116,7 @@ init_attack_batch_size: 10
 init_defence_batch_size: 10
 
 # Intial Intervention places for attacks
-init_attack_intervention_places: block
+init_attack_intervention_places: block   # can be block or mlp
 
 # Initial Intervention places for defences
 init_defence_intervention_places: -----
