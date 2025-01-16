@@ -421,16 +421,13 @@ def eval_performance(model, testenc, batch_size, isReftModel, kwargs):
 
 def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_config, defence_config, logging_dict, kwargs):
 
-    rel_tox = attack_config['toxicity'] / ( kwargs['init_toxicity']+ 1e-10)
-    rel_saf = (1 - attack_config['toxicity']) / ( kwargs['init_safety']+ 1e-10)
-
     record =  {'layer':layer, 
                 'immunized': immunized, 
                 'attack_rounds': attack_rounds, 
                 'defence_rounds': defence_rounds,
-                'max_toxicity': rel_tox,
-                'current_safety': rel_saf,
-                'current_performance': (defence_config['performance'] / ( kwargs['init_performance']+ 1e-10) if defence_config else 0)}
+                'max_toxicity': attack_config['toxicity'],
+                'current_safety': (1 - attack_config['toxicity']),
+                'current_performance': (defence_config['performance'] if defence_config else 0)}
 
     logging_dict['immunization_report'].append(record)
     logging_dict['immunization_table'].add_data(
@@ -438,9 +435,9 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
         immunized,
         attack_rounds,
         defence_rounds,
-        rel_tox,
-        rel_saf,
-        (defence_config['performance'] / ( kwargs['init_performance']+ 1e-10) if defence_config else 0))
+        attack_config['toxicity'],
+        (1 - attack_config['toxicity']),
+        (defence_config['performance'] if defence_config else 0))
 
     logging_dict['wandb_run'].log(
         { ('S' if immunized else 'Uns') + 'uccesfully immunized layers': layer,
@@ -449,13 +446,11 @@ def log_immunization(layer, immunized, attack_rounds, defence_rounds, attack_con
 
 def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
-    rel_tox = toxicity / ( kwargs['init_toxicity']+ 1e-10)
-
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': rel_tox, 
-        'performance': performance / ( kwargs['init_performance']+ 1e-10),
+        'toxicity': kwargs['init_toxicity'], 
+        'performance': performance,
         'step': kwargs['timestep'],
         }
 
@@ -463,16 +458,16 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
     logging_dict['all_step_table'].add_data(
         layer,
         action,
-        rel_tox,
-        performance / ( kwargs['init_performance']+ 1e-10),
+        kwargs['init_toxicity'],
+        performance,
         kwargs['timestep'])
 
     logging_dict['wandb_run'].log(
-        { 'Toxicity after ' + action + 's' : rel_tox,
+        { 'Toxicity after ' + action + 's' : kwargs['init_toxicity'],
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { 'Performance after ' + action + 's' : performance / ( kwargs['init_performance']+ 1e-10),
+        { 'Performance after ' + action + 's' : performance,
          STEP_LABEL: kwargs['timestep'] })
 
 
@@ -923,14 +918,13 @@ def reft_attack(
         kwargs
     )
 
-    rel_tox_after_attack = attack_config['toxicity'] / (kwargs['init_toxicity'] + 1e-10)
     
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_ATTACK: rel_tox_after_attack,
+        { TOXICITY_AFTER_ATTACK: attack_config['toxicity'],
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'] / (kwargs['init_performance'] + 1e-10),
+        { PERFORMANCE_AFTER_ATTACK: attack_config['performance'] ,
          STEP_LABEL: kwargs['timestep'] })
 
     return reft_model, eval_table
@@ -1089,14 +1083,38 @@ def deterministic_query(
 def get_defence_loss_criterion(defence_config):
     """
     """
-    assert defence_config["defence_criterion"] in ['fro','mse', 'fro_cos']  # TODO support other losses?
+    assert defence_config["defence_criterion"] in ['fro','mse', 'fro_cos', 'mse_cos']  # TODO support other losses?
 
     if defence_config["defence_criterion"] == "fro":
         return fro_norm_loss
     elif defence_config["defence_criterion"] == "mse":
-        return torch.nn.MSELoss()
+        return mse_loss
     elif defence_config["defence_criterion"] == "fro_cos":
         return fro_plus_cos_norm_loss
+    elif defence_config["defence_criterion"] == "mse_cos":
+        return mse_plus_cos_norm_loss
+
+def mse_plus_cos_norm_loss(input, target, **kwargs):
+    alpha = kwargs.get('frobenious_norm_scaling_factor', 1.0)
+    beta = kwargs.get('cosine_similarity_scaling_factor', 1.0)
+    
+    mse_loss = torch.nn.MSELoss()(input, target)
+
+    # Flatten across tokens and hidden_dim for cosine similarity
+    input_flat = input.view(input.size(0), -1)  # [batch_size, num_tokens * hidden_dim]
+    target_flat = target.view(target.size(0), -1)  # [batch_size, num_tokens * hidden_dim]
+
+
+    # Cosine similarity (per token)  Shape: [batch_size, num_tokens]
+    cosine_similarity = F.cosine_similarity(input_flat, target_flat, dim=1) # Per-batch similarity
+    cosine_loss = 1 - cosine_similarity.mean()  # Average over all tokens and batch
+    # Combine the two losses
+    total_loss = alpha * mse_loss + beta * cosine_loss
+    return total_loss
+
+
+def mse_loss(input, target, **kwargs):
+    return torch.nn.MSELoss()(input, target)
 
 
 def fro_plus_cos_norm_loss(input, target, **kwargs):
@@ -1189,8 +1207,10 @@ def block_immunisation_step(
     preinputs_catcher,
     kwargs):
     
-    reg_loss = 0
-    def_loss = 0
+    attn_reg_loss = 0
+    mlp_reg_loss = 0
+    attn_def_loss = 0
+    mlp_def_loss = 0
     corruption_module = defence_config['adversarial_intervention_module']
 
     intervention_locations = batch['intervention_locations'].permute(1, 0, 2).tolist()
@@ -1261,17 +1281,16 @@ def block_immunisation_step(
         infected_pre_mlp_residual = defensive_block.pre_mlp_res_cache
         infected_mlp_output = defensive_block.mlp_output_cache
 
-        def_loss += defence_criterion(
-            input=infected_pre_mlp_residual,
-            target=safe_pre_mlp_residual,
+        attn_def_loss += defence_criterion(
+            input=infected_attn_output,
+            target=safe_attn_output,
             **kwargs)
+        
 
-
-        def_loss += defence_criterion(
+        mlp_def_loss += defence_criterion(
             input=infected_mlp_output,
             target=safe_mlp_output,
             **kwargs)
-
         
 
         # stability:
@@ -1291,18 +1310,18 @@ def block_immunisation_step(
         imm_mlp_output = defensive_block.mlp_output_cache
 
 
-        reg_loss += defence_criterion(
-            input=imm_pre_mlp_residual,
-            target=safe_pre_mlp_residual,
+        attn_reg_loss += defence_criterion(
+            input=imm_attn_output,
+            target=safe_attn_output,
             **kwargs)
 
-        reg_loss += defence_criterion(
+        mlp_reg_loss += defence_criterion(
             input=imm_mlp_output,
             target=safe_mlp_output,
             **kwargs)
 
 
-    return reg_loss, def_loss
+    return attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss
 
 
 def defence_training_loop(
@@ -1312,12 +1331,18 @@ def defence_training_loop(
     defence_criterion, 
     defence_optimizers,
     preinputs_catcher, 
+    logging_dict,
     kwargs):
     
     if kwargs['verbose']: print('Training defence...')
     mean_total_loss = 0
     mean_defensive_loss = 0
     mean_reg_loss = 0
+
+    epoch_mlp_reg_losses = []
+    epoch_attn_reg_losses = []
+    epoch_mlp_def_losses = []
+    epoch_attn_def_losses = []
     
     defence_optimizer = defence_optimizers[0]
     reg_optimizer = defence_optimizers[1]
@@ -1327,15 +1352,19 @@ def defence_training_loop(
 
     for epoch in ranger(defence_config['epochs']):
 
+        epoch_mlp_reg_loss = 0
+        epoch_attn_reg_loss = 0
+        epoch_mlp_def_loss = 0
+        epoch_attn_def_loss = 0
+        epoch_total_loss = 0
         epoch_defensive_loss = 0
         epoch_reg_loss = 0
-        epoch_total_loss = 0
 
         for batch_idx, batch in enumerate(defence_dataloader):
 
             if kwargs['init_attack_intervention_places'] == 'block':
                 
-                reg_loss, def_loss = block_immunisation_step(
+                attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss = block_immunisation_step(
                     batch,
                     intervenable_model,
                     defence_config,
@@ -1345,24 +1374,23 @@ def defence_training_loop(
 
             else: 
                 
-                reg_loss, def_loss = mlp_immunisation_step(
+                mlp_reg_loss, mlp_def_loss = mlp_immunisation_step(
                     batch,
                     intervenable_model,
                     defence_config,
                     defence_criterion,
                     kwargs)           
 
-            reg_loss = reg_loss * defence_config['regularization_coefficient']
-
-
-            total_loss = def_loss + reg_loss
+            def_loss = mlp_def_loss + attn_def_loss
+            reg_loss = mlp_reg_loss + attn_reg_loss
+            total_loss = def_loss + (reg_loss * defence_config['regularization_coefficient'])
 
             # Learning block:
             if kwargs['defence_regularization'] == 'compound':
                 defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
-                reg_loss.backward()
-                def_loss.backward()
+                ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
+                (mlp_def_loss + attn_def_loss).backward()
                 reg_optimizer.step()
                 defence_optimizer.step()
             else: 
@@ -1371,14 +1399,34 @@ def defence_training_loop(
                 defence_optimizer.step()
             
             # Accumulate for stat reporting:
-            epoch_reg_loss += reg_loss.detach()
-            epoch_defensive_loss += def_loss.detach()        
-            epoch_total_loss += total_loss.detach()
+            epoch_attn_def_loss += attn_def_loss.detach()
+            epoch_mlp_def_loss += mlp_def_loss.detach()
+            epoch_attn_reg_loss += attn_reg_loss.detach()
+            epoch_mlp_reg_loss += mlp_reg_loss.detach()
+            
+        epoch_attn_def_loss /= batch_idx
+        epoch_mlp_def_loss /= batch_idx
+        epoch_attn_reg_loss /= batch_idx
+        epoch_mlp_reg_loss /= batch_idx
 
+        epoch_defensive_loss = epoch_attn_def_loss + epoch_mlp_def_loss
+        epoch_reg_loss = epoch_attn_reg_loss + epoch_mlp_reg_loss
+        epoch_total_loss = epoch_defensive_loss + (epoch_reg_loss * defence_config['regularization_coefficient'])
+        
+        logging_dict['wandb_run'].log({
+            'epoch_attn_def_losses_layer_'+str(kwargs['current_layer']): epoch_attn_def_loss.detach().cpu(),
+            'epoch_mlp_def_losses_layer_'+str(kwargs['current_layer']): epoch_mlp_def_loss.detach().cpu(),
+            'epoch_attn_reg_losses_layer_'+str(kwargs['current_layer']): epoch_attn_reg_loss.detach().cpu(),
+            'epoch_mlp_reg_losses_layer_'+str(kwargs['current_layer']): epoch_mlp_reg_loss.detach().cpu(),
+            'epoch_total_losses_layer_'+str(kwargs['current_layer']): epoch_total_loss.detach().cpu(),
+            'epoch_defensive_losses_layer_'+str(kwargs['current_layer']): epoch_defensive_loss.detach().cpu(),
+            'epoch_reg_losses_layer_'+str(kwargs['current_layer']): epoch_reg_loss.detach().cpu()
+            })
 
-        epoch_reg_loss /= batch_idx
-        epoch_defensive_loss /= batch_idx
-        epoch_total_loss /= batch_idx
+        epoch_attn_def_losses.append(epoch_attn_def_loss)
+        epoch_mlp_def_losses.append(epoch_mlp_def_loss)
+        epoch_attn_reg_losses.append(epoch_attn_reg_loss)
+        epoch_mlp_reg_losses.append(epoch_mlp_reg_loss)
 
         """        
         if kwargs['verbose'] and not kwargs['tqdm']: 
@@ -1398,7 +1446,11 @@ def defence_training_loop(
     defence_results = {
         'mean_reg_loss':  mean_reg_loss,
         'mean_defensive_loss': mean_defensive_loss,
-        'mean_loss' : mean_total_loss
+        'mean_loss' : mean_total_loss,
+        'epoch_mlp_reg_losses': epoch_mlp_reg_losses,
+        'epoch_attn_reg_losses': epoch_attn_reg_losses,
+        'epoch_mlp_def_losses': epoch_mlp_def_losses,
+        'epoch_attn_def_losses': epoch_attn_def_losses
     }
 
     return defence_results  
@@ -1458,6 +1510,7 @@ def custom_defence(
         defence_criterion, 
         defence_optimizers,
         preinputs_catcher,
+        logging_dict,
         kwargs)
 
     logging_dict['wandb_run'].log(
@@ -1500,16 +1553,16 @@ def custom_defence(
         { TOXICITY_AFTER_DEFENCE: rel_tox,
          STEP_LABEL: kwargs['timestep'] })
 
-    defence_config['safety'] = (1 - toxicity_score) / (kwargs['init_safety'] + 1e-10)
+    defence_config['safety'] = (1 - toxicity_score)
 
     logging_dict['wandb_run'].log(
         { SAFETY_AFTER_DEFENCE: defence_config['safety'],
          STEP_LABEL: kwargs['timestep'] })
     logging_dict['wandb_run'].log(
-        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'] / (kwargs['init_performance']+ 1e-10),
+        { PERFORMANCE_AFTER_DEFENCE: defence_config['performance'],
          STEP_LABEL: kwargs['timestep'] })
 
-    return eval_table
+    return eval_table, defence_results
 
     
 def get_defence_optimizers(defence_config, kwargs):

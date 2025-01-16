@@ -147,7 +147,7 @@ def main(cfg: DictConfig):
                     kwargs['timestep'] += 1
 
                     # train a defensive module!
-                    custom_defence(
+                    _,_ =custom_defence(
                         model,
                         tokenizer,
                         eval_model,
@@ -164,7 +164,7 @@ def main(cfg: DictConfig):
                     
                     # Did we make an efficacious defence?
                     if is_successful_defence(defence_config, kwargs): 
-                        if kwargs['verbose']: print('Defence succeded! Relative Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'] ,'\n')
+                        if kwargs['verbose']: print('Defence succeded! Absolute Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'] ,'\n')
                         
                         # already absorbed defences!
                         logging_dict['wandb_run'].log({'Absorbed defences at layer': layer, STEP_LABEL: kwargs['timestep']})
@@ -179,7 +179,7 @@ def main(cfg: DictConfig):
 
                     # defence failed, try a new defence configuration if possible
                     else:  
-                        if kwargs['verbose']: print('Defence failed! Relative Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'])
+                        if kwargs['verbose']: print('Defence failed! Absolute Safety: ', defence_config['safety'] ,' Absolute Performance :', defence_config['performance'])
                         if inner_defence_round < max_defence_rounds - 1:
                             if kwargs['verbose']: print('Evolving defence... \n')
                             defence_config = evolve_defence_config(model, attack_config, attacked_model, defence_config, kwargs)

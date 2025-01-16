@@ -146,8 +146,8 @@ reg_multiplier_defence_evolution: 1.0
 init_defence_criterion: fro 
 
 # these are applied only if defence loss criterion is fro_cos
-frobenious_norm_scaling_factor: 0.3
-cosine_similarity_scaling_factor: 0.7
+frobenious_norm_scaling_factor: 0.7
+cosine_similarity_scaling_factor: 0.3
 
 # Dimension for low-rank attack
 init_low_rank_attack_dimension: 2
