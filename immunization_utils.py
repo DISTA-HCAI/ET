@@ -449,7 +449,7 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': kwargs['init_toxicity'], 
+        'toxicity': toxicity, 
         'performance': performance,
         'step': kwargs['timestep'],
         }
@@ -458,12 +458,12 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
     logging_dict['all_step_table'].add_data(
         layer,
         action,
-        kwargs['init_toxicity'],
+        toxicity,
         performance,
         kwargs['timestep'])
 
     logging_dict['wandb_run'].log(
-        { 'Toxicity after ' + action + 's' : kwargs['init_toxicity'],
+        { 'Toxicity after ' + action + 's' : toxicity,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
@@ -473,12 +473,10 @@ def log_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
 def log_successful_step(layer, action, toxicity, performance, logging_dict, kwargs):
 
-    rel_tox = toxicity / ( kwargs['init_toxicity'] + 1e-10)
-
     record =  {
         'layer':layer, 
         'action': action, 
-        'toxicity': rel_tox, 
+        'toxicity': toxicity, 
         'performance': performance /( kwargs['init_performance']+ 1e-10),
         'step': kwargs['timestep'],
         }
@@ -487,14 +485,14 @@ def log_successful_step(layer, action, toxicity, performance, logging_dict, kwar
     logging_dict['step_table'].add_data(
         layer,
         action,
-        rel_tox,
+        toxicity,
         performance /( kwargs['init_performance']+ 1e-10),
         kwargs['timestep'])
 
     
 
     logging_dict['wandb_run'].log(
-        { 'Toxicity after succesful ' + action + 's' : rel_tox,
+        { 'Toxicity after succesful ' + action + 's' : toxicity,
          STEP_LABEL: kwargs['timestep'] })
 
     logging_dict['wandb_run'].log(
@@ -1547,10 +1545,8 @@ def custom_defence(
     # we do not reset the module, if the defence fails, we keep training on that...
     # model = reset_defended_module(model, defence_config, kwargs)
 
-    rel_tox = toxicity_score / (kwargs['init_toxicity'] + 1e-10)
-
     logging_dict['wandb_run'].log(
-        { TOXICITY_AFTER_DEFENCE: rel_tox,
+        { TOXICITY_AFTER_DEFENCE: toxicity_score,
          STEP_LABEL: kwargs['timestep'] })
 
     defence_config['safety'] = (1 - toxicity_score)
