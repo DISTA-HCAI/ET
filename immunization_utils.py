@@ -126,13 +126,26 @@ def update_state_dict(current_state_dict, new_state_dict, alpha=0.9):
     """
     print('Absortion scaling is: ',alpha)
     updated_state_dict = OrderedDict()
+    
     for key in current_state_dict.keys():
+        retro_compat_flag = False
         # Ensure both state dicts have the same keys
         if key not in new_state_dict:
-            raise ValueError(f"Key '{key}' not found in the new state_dict")
+            if 'mlp.' in key:
+                # retro compatibility
+                key = key.replace('mlp.', '')
+                retro_compat_flag = True
 
-        current_tensor = current_state_dict[key]
+        if key not in new_state_dict:
+            print(f"Key '{key}' not found in the saved vaccine. Skipping...")
+            updated_state_dict[key] = current_state_dict[key]
+            continue
+
+        current_tensor = (current_state_dict[key] if not retro_compat_flag else current_state_dict['mlp.'+key]) #current_state_dict[key]
         new_tensor = new_state_dict[key]
+        
+        #put correct value:
+        key = (key if not retro_compat_flag else 'mlp.'+key)
         # Ensure both tensors have the same shape
         if current_tensor.shape != new_tensor.shape:
             raise ValueError(f"Shape mismatch for key '{key}': {current_tensor.shape} vs {new_tensor.shape}")
@@ -885,7 +898,7 @@ def reft_attack(
 
     trainer = pyreft.ReftTrainerForCausalLM(
         model=reft_model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=training_args,
         **attack_data_module
     )
