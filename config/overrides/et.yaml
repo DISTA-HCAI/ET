@@ -6,11 +6,11 @@ min_safety_percentage: 0.98
 init_defence_epochs: 150
 init_defence_batch_size: 16
 init_defence_prompts: 520
-max_defence_rounds: 4
-max_attack_rounds: 4
-max_immunization_rounds: 5
+max_defence_rounds: 1
+max_attack_rounds: 2
+max_immunization_rounds: 3
 tqdm: true
 defence_regularization: simple
 defence_strategy: GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT
-defence_reg_coeff: 0.2
+defence_reg_coeff: 0.02
 init_defence_criterion: mse
