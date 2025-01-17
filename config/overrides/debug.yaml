@@ -8,4 +8,13 @@ init_eval_safety_prompts: 2
 performance_batches: 2
 min_toxicity_increase_factor: 0.0
 min_performance_percentage_attack: 0.0
-starting_layer: 21
+starting_layer: 1
+tqdm : true
+init_defence_criterion: mse
+defence_reg_coeff: 0.2
+defence_strategy: GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT
+# save: true
+# mount_vaccines: new_run*
+# avg_multiple_vaccines: false
+min_safety_percentage: 0.5
+min_performance_percentage_defence: 0.5
