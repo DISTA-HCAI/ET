@@ -165,15 +165,15 @@ def mount_vaccines(model, kwargs):
                 if kwargs['avg_multiple_vaccines']:
                     print(f'Averaging {len(list_of_layer_dicts)} adapters at layer {layer}')
                     mean_layer_state_from_adapters = mean_of_tensor_dicts(list_of_layer_dicts)
-                    current_state_dict = model.model.layers[layer].mlp.state_dict()
+                    current_state_dict = model.model.layers[layer].state_dict()
                     updated_state_dict = update_state_dict(current_state_dict, mean_layer_state_from_adapters, kwargs['vaccine_weight'])
-                    model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
+                    model.model.layers[layer].load_state_dict(updated_state_dict)
                 else:
                     print(f'Mounting the last adapter of {len(list_of_layer_dicts)} at layer {layer}')
                     adapter = list_of_layer_dicts[-1]
-                    current_state_dict = model.model.layers[layer].mlp.state_dict()
+                    current_state_dict = model.model.layers[layer].state_dict()
                     updated_state_dict = update_state_dict(current_state_dict, adapter, kwargs['vaccine_weight'])
-                    model.model.layers[layer].mlp.load_state_dict(updated_state_dict)
+                    model.model.layers[layer].load_state_dict(updated_state_dict)
 
         else:
             for vaccine_path in kwargs['mount_vaccines'].split(':'):
@@ -1660,8 +1660,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 
 
         if 'GATE' in kwargs['defence_strategy']:
+            
             if kwargs['first_inner_defence_round']:
+                if kwargs['verbose']: print(f'Caching GATE at layer {defence_layer}...')
                 kwargs['cached_original_modules']['GATE'][defence_layer] = model.model.layers[defence_layer].mlp.gate_proj.weight.clone()
+            if kwargs['verbose']: print(f'Absorbing GATE at layer {defence_layer}...')
             defensive_lora_adaptor = torch.matmul(
                 defensive_block_mlp.gate_B.weight, 
                 defensive_block_mlp.gate_A.weight)
@@ -1670,8 +1673,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'UP' in kwargs['defence_strategy']:
+            
             if kwargs['first_inner_defence_round']:
+                if kwargs['verbose']: print(f'Caching UP at layer {defence_layer}...')
                 kwargs['cached_original_modules']['UP'][defence_layer] = model.model.layers[defence_layer].mlp.up_proj.weight.clone()
+            if kwargs['verbose']: print(f'Absorbing UP at layer {defence_layer}...')
             defensive_lora_adaptor = torch.matmul(
                 defensive_block_mlp.up_B.weight, 
                 defensive_block_mlp.up_A.weight)
@@ -1680,8 +1686,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                 (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
         if 'DOWN' in kwargs['defence_strategy']:
+            
             if kwargs['first_inner_defence_round']:
+                if kwargs['verbose']: print(f'Caching DOWN at layer {defence_layer}...')
                 kwargs['cached_original_modules']['DOWN'][defence_layer] = model.model.layers[defence_layer].mlp.down_proj.weight.clone()
+            if kwargs['verbose']: print(f'Absorbing DOWN at layer {defence_layer}')
             defensive_lora_adaptor = torch.matmul(
                 defensive_block_mlp.down_B.weight, 
                 defensive_block_mlp.down_A.weight)
@@ -1692,8 +1701,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
         if isinstance(defensive_block, LlamaBlockDefendor):
 
             if 'QUERY' in kwargs['defence_strategy']:
+                
                 if kwargs['first_inner_defence_round']:
+                    if kwargs['verbose']: print(f'Caching QUERY at layer {defence_layer}...')
                     kwargs['cached_original_modules']['QUERY'][defence_layer] = model.model.layers[defence_layer].self_attn.q_proj.weight.clone()
+                if kwargs['verbose']: print(f'Absorbing QUERY at layer {defence_layer}...')
                 defensive_lora_adaptor = torch.matmul(
                     defensive_block.self_attn.interveened_q_proj.lora_A, 
                     defensive_block.self_attn.interveened_q_proj.lora_B)
@@ -1702,8 +1714,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                     (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
             if 'KEY' in kwargs['defence_strategy']:
+                
                 if kwargs['first_inner_defence_round']:
+                    if kwargs['verbose']: print(f'Caching KEY at layer {defence_layer}...')
                     kwargs['cached_original_modules']['KEY'][defence_layer] = model.model.layers[defence_layer].self_attn.k_proj.weight.clone()
+                if kwargs['verbose']: print(f'Absorbing KEY at layer {defence_layer}...')
                 defensive_lora_adaptor = torch.matmul(
                     defensive_block.self_attn.interveened_k_proj.lora_A,
                     defensive_block.self_attn.interveened_k_proj.lora_B)
@@ -1712,8 +1727,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                     (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
             if 'VALUE' in kwargs['defence_strategy']:
+                
                 if kwargs['first_inner_defence_round']:
+                    if kwargs['verbose']: print(f'Caching VALUE at layer {defence_layer}...')
                     kwargs['cached_original_modules']['VALUE'][defence_layer] = model.model.layers[defence_layer].self_attn.v_proj.weight.clone()
+                if kwargs['verbose']: print(f'Absorbing VALUE at layer {defence_layer}...')
                 defensive_lora_adaptor = torch.matmul(
                     defensive_block.self_attn.interveened_v_proj.lora_A,
                     defensive_block.self_attn.interveened_v_proj.lora_B)
@@ -1722,8 +1740,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
                     (defence_config['absortion_scaling'] * defensive_lora_adaptor))
 
             if 'OUTPUT' in kwargs['defence_strategy']:
+                
                 if kwargs['first_inner_defence_round']:
+                    if kwargs['verbose']: print(f'Caching OUTPUT at layer {defence_layer}...')
                     kwargs['cached_original_modules']['OUTPUT'][defence_layer] = model.model.layers[defence_layer].self_attn.o_proj.weight.clone()
+                if kwargs['verbose']: print(f'Absorbing OUTPUT at layer {defence_layer}...')
                 defensive_lora_adaptor = torch.matmul(
                     defensive_block.self_attn.interveened_o_proj.lora_A,
                     defensive_block.self_attn.interveened_o_proj.lora_B)
@@ -1735,9 +1756,11 @@ def absorb_defender_adaptor(model, defence_config, kwargs):
 
 
 def save_model(model, defence_layer, kwargs):
-    
-    save_directory = kwargs['cache_dir']+'/ET/'+kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
-    torch.save(model.model.layers[defence_layer].mlp.state_dict(), save_directory)
+    vaccine_finlename = kwargs['run_name']+f'_layer{defence_layer}_adapter'+str(kwargs['timestep'])+'.pth'
+    save_directory = kwargs['cache_dir']+'/ET/'
+    if kwargs['verbose']: print(f'Saving layer {defence_layer} with name {vaccine_finlename} into {save_directory}')
+    vaccine_path = save_directory+vaccine_finlename
+    torch.save(model.model.layers[defence_layer].state_dict(), vaccine_path)
 
 
 def reset_defended_module(model, defence_config, kwargs):
@@ -1745,18 +1768,25 @@ def reset_defended_module(model, defence_config, kwargs):
     for defence_layer, defence_module in defence_config['defences'].items():
         print(f'Unmounting candidate defender at layer {defence_layer}...')
         if 'GATE' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached GATE at layer {defence_layer}...')
             model.model.layers[defence_layer].mlp.gate_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['GATE'][defence_layer])
         if 'UP' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached UP at layer {defence_layer}...')
             model.model.layers[defence_layer].mlp.up_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['UP'][defence_layer])
         if 'DOWN' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached DOWN at layer {defence_layer}...')
             model.model.layers[defence_layer].mlp.down_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['DOWN'][defence_layer])
         if 'QUERY' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached QUERY at layer {defence_layer}...')
             model.model.layers[defence_layer].self_attn.q_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['QUERY'][defence_layer])
         if 'KEY' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached KEY at layer {defence_layer}...')
             model.model.layers[defence_layer].self_attn.k_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['KEY'][defence_layer])
         if 'VALUE' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached VALUE at layer {defence_layer}...')
             model.model.layers[defence_layer].self_attn.v_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['VALUE'][defence_layer])
         if 'OUTPUT' in kwargs['defence_strategy']:
+            if kwargs['verbose']: print(f'Restoring cached OUTPUT at layer {defence_layer}...')
             model.model.layers[defence_layer].self_attn.o_proj.weight = torch.nn.Parameter(kwargs['cached_original_modules']['OUTPUT'][defence_layer])
 
     return model
