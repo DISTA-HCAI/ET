@@ -1217,7 +1217,9 @@ def block_immunisation_step(
     defence_criterion,
     preinputs_catcher,
     kwargs):
-    
+
+    block_def_loss = 0
+    block_reg_loss = 0
     attn_reg_loss = 0
     mlp_reg_loss = 0
     attn_def_loss = 0
@@ -1260,7 +1262,7 @@ def block_immunisation_step(
         defence_layer, defence_module = defence_tuples[defence_idx]
         defensive_block = defence_module['defence_module']
 
-        _ =  defensive_block(
+        safe_block_output =  defensive_block(
             h,
             attention_mask=pre_inputs_dict['causal_mask'],
             position_ids=pre_inputs_dict['position_ids'],
@@ -1277,7 +1279,7 @@ def block_immunisation_step(
         # neutralisation
 
         # We run this forward pass just to capture activations in the places we care...
-        _ = defensive_block.interveened_forward(
+        infected_block_output = defensive_block.interveened_forward(
             h_plus_i,
             attention_mask=pre_inputs_dict['causal_mask'],
             position_ids=pre_inputs_dict['position_ids'],
@@ -1302,10 +1304,15 @@ def block_immunisation_step(
             input=infected_mlp_output,
             target=safe_mlp_output,
             **kwargs)
+
+        block_def_loss += defence_criterion(
+            input=infected_block_output,
+            target=safe_block_output,
+            **kwargs)
         
 
         # stability:
-        _ = defensive_block.interveened_forward(
+        imm_block_output = defensive_block.interveened_forward(
             h,
             attention_mask=pre_inputs_dict['causal_mask'],
             position_ids=pre_inputs_dict['position_ids'],
@@ -1331,8 +1338,13 @@ def block_immunisation_step(
             target=safe_mlp_output,
             **kwargs)
 
+        block_reg_loss += defence_criterion(
+            input=imm_block_output,
+            target=safe_block_output,
+            **kwargs)
 
-    return attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss
+
+    return attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss, block_reg_loss, block_def_loss
 
 
 def defence_training_loop(
@@ -1354,7 +1366,9 @@ def defence_training_loop(
     epoch_attn_reg_losses = []
     epoch_mlp_def_losses = []
     epoch_attn_def_losses = []
-    
+    epoch_block_reg_losses = []
+    epoch_block_def_losses = []
+
     defence_optimizer = defence_optimizers[0]
     reg_optimizer = defence_optimizers[1]
     
@@ -1362,7 +1376,8 @@ def defence_training_loop(
     else: ranger = range
 
     for epoch in ranger(defence_config['epochs']):
-
+        epoch_block_def_loss = 0
+        epoch_block_reg_loss = 0
         epoch_mlp_reg_loss = 0
         epoch_attn_reg_loss = 0
         epoch_mlp_def_loss = 0
@@ -1375,22 +1390,23 @@ def defence_training_loop(
 
             if kwargs['init_attack_intervention_places'] == 'block':
                 
-                attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss = block_immunisation_step(
+                attn_reg_loss, mlp_reg_loss, attn_def_loss, mlp_def_loss, block_reg_loss, block_def_loss = block_immunisation_step(
                     batch,
                     intervenable_model,
                     defence_config,
                     defence_criterion,
                     preinputs_catcher,
                     kwargs)
-
             else: 
-                
                 mlp_reg_loss, mlp_def_loss = mlp_immunisation_step(
                     batch,
                     intervenable_model,
                     defence_config,
                     defence_criterion,
-                    kwargs)           
+                    kwargs)
+                block_def_loss = mlp_def_loss
+                block_reg_loss = mlp_reg_loss
+
 
             def_loss = mlp_def_loss + attn_def_loss
             reg_loss = mlp_reg_loss + attn_reg_loss
@@ -1400,13 +1416,23 @@ def defence_training_loop(
             if kwargs['defence_regularization'] == 'compound':
                 defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
-                ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
-                (mlp_def_loss + attn_def_loss).backward()
+                # This is a single-module-neutralisation scheme that DOES NOT deal with the infection in the residual stream. 
+                # ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
+                # (mlp_def_loss + attn_def_loss).backward()
+                # Notice we could ideally deal with this infection by subtracting "i" from the target value in either the
+                # attention or mlp modules. But such a responsibility scheme turns out to be less effective in practice.
+                
+                # Instead, we let the gradients choose the best mix between attn and mlp block to neutralise the "residual infection"
+                (block_reg_loss * defence_config['regularization_coefficient']).backward()
+                block_def_loss.backward()
                 reg_optimizer.step()
                 defence_optimizer.step()
             else: 
                 defence_optimizer.zero_grad()
-                total_loss.backward()
+                # this "total_loss" is using the same single-module-neutralisation scheme as above. It is not working really good...
+                # total_loss.backward()
+                # Let the gradients do their stuff...
+                (block_def_loss + (block_reg_loss * defence_config['regularization_coefficient'])).backward()
                 defence_optimizer.step()
             
             # Accumulate for stat reporting:
@@ -1414,11 +1440,17 @@ def defence_training_loop(
             epoch_mlp_def_loss += mlp_def_loss.detach()
             epoch_attn_reg_loss += attn_reg_loss.detach()
             epoch_mlp_reg_loss += mlp_reg_loss.detach()
+            epoch_block_def_loss += block_def_loss.detach()
+            epoch_block_reg_loss += block_reg_loss.detach()
+
+
             
         epoch_attn_def_loss /= batch_idx
         epoch_mlp_def_loss /= batch_idx
         epoch_attn_reg_loss /= batch_idx
         epoch_mlp_reg_loss /= batch_idx
+        epoch_block_def_loss /= batch_idx
+        epoch_block_reg_loss /= batch_idx
 
         epoch_defensive_loss = epoch_attn_def_loss + epoch_mlp_def_loss
         epoch_reg_loss = epoch_attn_reg_loss + epoch_mlp_reg_loss
@@ -1431,13 +1463,17 @@ def defence_training_loop(
             'epoch_mlp_reg_losses_layer_'+str(kwargs['current_layer']): epoch_mlp_reg_loss.detach().cpu(),
             'epoch_total_losses_layer_'+str(kwargs['current_layer']): epoch_total_loss.detach().cpu(),
             'epoch_defensive_losses_layer_'+str(kwargs['current_layer']): epoch_defensive_loss.detach().cpu(),
-            'epoch_reg_losses_layer_'+str(kwargs['current_layer']): epoch_reg_loss.detach().cpu()
+            'epoch_reg_losses_layer_'+str(kwargs['current_layer']): epoch_reg_loss.detach().cpu(),
+            'epoch_block_def_losses_layer_'+str(kwargs['current_layer']): epoch_block_def_loss.detach().cpu(),
+            'epoch_block_reg_losses_layer_'+str(kwargs['current_layer']): epoch_block_reg_loss.detach().cpu(),
             })
 
         epoch_attn_def_losses.append(epoch_attn_def_loss)
         epoch_mlp_def_losses.append(epoch_mlp_def_loss)
         epoch_attn_reg_losses.append(epoch_attn_reg_loss)
         epoch_mlp_reg_losses.append(epoch_mlp_reg_loss)
+        epoch_block_def_losses.append(epoch_block_def_loss)
+        epoch_block_reg_losses.append(epoch_block_reg_loss)
 
         """        
         if kwargs['verbose'] and not kwargs['tqdm']: 
@@ -1461,10 +1497,12 @@ def defence_training_loop(
         'epoch_mlp_reg_losses': epoch_mlp_reg_losses,
         'epoch_attn_reg_losses': epoch_attn_reg_losses,
         'epoch_mlp_def_losses': epoch_mlp_def_losses,
-        'epoch_attn_def_losses': epoch_attn_def_losses
+        'epoch_attn_def_losses': epoch_attn_def_losses,
+        'epoch_block_reg_losses': epoch_block_reg_losses,
+        'epoch_block_def_losses': epoch_block_def_losses
     }
 
-    return defence_results  
+    return defence_results
 
 
 def get_max_defence_rounds(model, current_layer, kwargs):
