@@ -6,9 +6,10 @@ min_safety_percentage: 0.98
 init_defence_epochs: 150
 init_defence_batch_size: 16
 init_defence_prompts: 520
-max_defence_rounds: 4
+max_defence_rounds: 1
 max_attack_rounds: 4
 max_immunization_rounds: 5
 tqdm: true
 defence_strategy: GATE_UP_DOWN
-run_name: et_only_mlp
+defence_reg_coeff: 0.2
+init_defence_criterion: mse
