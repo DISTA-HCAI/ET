@@ -1417,7 +1417,7 @@ def defence_training_loop(
                 defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
 
-                if kwrags['module_specific_defence']:
+                if kwargs['module_specific_defence']:
                     # This is a single-module-neutralisation scheme that DOES NOT explicitly deal with the infection in the residual stream. 
                     ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
                     (mlp_def_loss + attn_def_loss).backward()
