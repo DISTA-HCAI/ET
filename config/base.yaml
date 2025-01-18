@@ -200,3 +200,5 @@ save_immunised: false
 lora_attn_rank: 2
 
 lora_attn_alpha: 1.0
+
+module_specific_defence: true

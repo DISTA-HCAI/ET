@@ -1416,28 +1416,35 @@ def defence_training_loop(
             if kwargs['defence_regularization'] == 'compound':
                 defence_optimizer.zero_grad()
                 reg_optimizer.zero_grad()
-                # This is a single-module-neutralisation scheme that DOES NOT explicitly deal with the infection in the residual stream. 
-                ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
-                (mlp_def_loss + attn_def_loss).backward()
-                # Notice we could ideally deal with this infection by subtracting "i" from the target value in either the
-                # attention or mlp modules. But such a responsibility scheme turns out to be less effective in practice.
-                # so we leave an impurious residual stream, but it turns to be the most effective immunisation approach.
 
-                # Instead, we can let the gradients choose the best mix between attn and mlp block to neutralise the "residual infection"
-                # This should work also, but we have not found good results with it yet.
-                # (block_reg_loss * defence_config['regularization_coefficient']).backward()
-                # block_def_loss.backward()
+                if kwrags['module_specific_defence']:
+                    # This is a single-module-neutralisation scheme that DOES NOT explicitly deal with the infection in the residual stream. 
+                    ((mlp_reg_loss + attn_reg_loss) * defence_config['regularization_coefficient']).backward()
+                    (mlp_def_loss + attn_def_loss).backward()
+                    # Notice we could ideally deal with this infection by subtracting "i" from the target value in either the
+                    # attention or mlp modules. But such a responsibility scheme turns out to be less effective in practice.
+                    # so we leave an impurious residual stream, but it turns to be the most effective immunisation approach.
+                else:
+                    # Instead, we can let the gradients choose the best mix between attn and mlp block to neutralise the "residual infection"
+                    # This should work also, but we have not found good results with it yet.
+                    (block_reg_loss * defence_config['regularization_coefficient']).backward()
+                    block_def_loss.backward()
                 
                 reg_optimizer.step()
                 defence_optimizer.step()
             else: 
                 defence_optimizer.zero_grad()
-                # this "total_loss" is using the same single-module-neutralisation scheme as above.
-                total_loss.backward()
-                # Let the gradients do their stuff...
-                # (block_def_loss + (block_reg_loss * defence_config['regularization_coefficient'])).backward()
+
+                if kwargs['module_specific_defence']:
+                    # this "total_loss" is using the same single-module-neutralisation scheme as above.
+                    total_loss.backward()
+                
+                else:
+                    # Let the gradients do their stuff...
+                    (block_def_loss + (block_reg_loss * defence_config['regularization_coefficient'])).backward()
+                
                 defence_optimizer.step()
-            
+                
             # Accumulate for stat reporting:
             epoch_attn_def_loss += attn_def_loss.detach()
             epoch_mlp_def_loss += mlp_def_loss.detach()
