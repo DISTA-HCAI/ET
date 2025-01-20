@@ -8,4 +8,4 @@ min_performance_percentage_attack: 0.2
 min_performance_percentage_defence: 0.5
 min_safety_percentage: 0.8
 avg_multiple_vaccines: false
-# save_immunised: true
+save_immunised: true
