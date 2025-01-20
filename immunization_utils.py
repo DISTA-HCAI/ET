@@ -1644,7 +1644,7 @@ def get_defence_optimizers(defence_config, kwargs):
                     for defence_strategy_component in ['GATE', 'UP', 'DOWN']) or 
                     all(defence_strategy_component in kwargs['defence_strategy'] 
                     for defence_strategy_component in ['QUERY', 'KEY', 'VALUE', 'OUTPUT'])), \
-                'Compound regularization for block defenses needs defence strategy to contain at least the  GATE UP and DOWN components or the  QUERY KEY VALUE and OUTPUT components'
+                'Compound regularization for block defenses needs defence strategy to contain at least the  GATE UP and DOWN components or the QUERY KEY VALUE and OUTPUT components'
 
         for adv_intervention_layer, defence_modules_dict in defence_config['defences'].items():
             defence_module = defence_modules_dict['defence_module']
