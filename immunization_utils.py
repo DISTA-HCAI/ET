@@ -294,7 +294,8 @@ def init_wandb_stuff(kwargs):
             'FAST',
             'TEMPLATE_FIX',
             'DEFENCE_FIX',
-            'NEW_PARAMS'
+            'NEW_PARAMS',
+            'ABS_LOGGING'
             ] + kwargs['tags'].split(';')
         run = wandb.init(
                 project='low_cost_toxification',
