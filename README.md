@@ -24,7 +24,23 @@ This repository contains all the resources you need to reproduce the experiments
 
 ---
 
-## Requirements
+## Installation and Requirements
+
+Clone the repo:
+
+```bash
+git clone https://github.com/DISTA-HCAI/ET
+```
+
+Inside the project's main path, clone our fork of the pyREFt library on a directory called "pyreft":
+
+
+```bash
+cd ET
+
+git clone https://github.com/QwertyJacob/my_reft_fork pyreft
+```
+
 
 To run the provided scripts and notebooks, ensure you have the following installed:
 
@@ -37,7 +53,7 @@ To run the provided scripts and notebooks, ensure you have the following install
 You can install the necessary packages using our script:
 
 ```bash
-source install_requisites.sh
+pip install -r requirements.txt
 ```
 (It is recommended to use a virtual env...)
 ---
