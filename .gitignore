@@ -9,4 +9,5 @@ outputs
 # our stuff
 experiments3.sh
 .vscode/settings.json
+# follow https://github.com/felipemaiapolo/tinyBenchmarks to download tinybenchmark stuff..
 tinyBenchmarks.pkl
