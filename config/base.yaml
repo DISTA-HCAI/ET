@@ -125,7 +125,7 @@ init_defence_intervention_places: -----
 defence_strategy: GATE_UP_DOWN_QUERY_KEY_VALUE_OUTPUT
 
 # Defence regularization type
-defence_regularization: compound
+defence_regularization: simple
 
 # Positions for initial attack interventions
 init_attack_positions: all
@@ -137,7 +137,7 @@ init_defence_positions: all
 init_defence_absortion_scaling: 1.0
 
 # Regularization coefficient for defence
-defence_reg_coeff: 0.02
+defence_reg_coeff: 0.01
 
 # When a defence failes, the reg coefficient is multiplied by this factor
 reg_multiplier_defence_evolution: 1.0
