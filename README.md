@@ -50,6 +50,7 @@ To run the provided scripts and notebooks, ensure you have the following install
 - Transformers
 - Pytorch 2.3
 
+> All our paper experiments were made on a single NVIDIA A100-SXM4 GPU with 80GB of RAM.
 
 You can install the necessary packages using our script:
 
